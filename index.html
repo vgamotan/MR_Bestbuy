@@ -88,7 +88,7 @@
   .tabs { display: flex; gap: 4px; padding: 14px 32px 0; border-bottom: 1px solid #E4DDCF; }
   .tab { padding: 8px 16px; font-size: 13px; color: #6B6558; cursor: pointer; border-bottom: 2px solid transparent; }
   .tab.active { color: #163832; border-bottom-color: #163832; font-weight: 600; }
-  .toolbar { padding: 18px 32px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid #E4DDCF; }
+  .toolbar { padding: 18px 32px; display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; border-bottom: 1px solid #E4DDCF; }
   .field { border: 1px solid #E4DDCF; background: #fff; border-radius: 3px; padding: 7px 10px; font-size: 13px; color: #2A2721; }
   .searchbox { display: flex; align-items: center; gap: 6px; border: 1px solid #E4DDCF; background: #fff; border-radius: 3px; padding: 6px 10px; flex: 1; min-width: 160px; }
   .searchbox input { border: none; outline: none; font-size: 13px; flex: 1; background: transparent; width: 100%; }
@@ -140,10 +140,10 @@
   .combo-option.selected { color: #163832; font-weight: 600; }
   .combo-create { color: #B98B2A; border-top: 1px solid #E4DDCF; }
   .combo-empty { padding: 7px 10px; font-size: 12.5px; color: #6B6558; }
-  .combo-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+  .combo-chips { display: flex; flex-wrap: wrap; gap: 5px; min-height: 24px; margin-bottom: 5px; align-items: flex-start; }
   .combo-chip { display: inline-flex; align-items: center; gap: 4px; background: #163832; color: #FAF7F1; font-size: 11.5px; padding: 3px 6px 3px 9px; border-radius: 999px; }
   .combo-chip button { background: none; border: none; color: #FAF7F1; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
-  .combo-filter-wrap { min-width: 190px; }
+  .combo-filter-wrap { flex: 1 1 190px; min-width: 170px; max-width: 240px; }
   .hidden { display: none !important; }
 
   /* Auth screen */
@@ -506,7 +506,7 @@ function renderListingsView(isAdmin) {
     },
     multi: true,
     allowCreate: false,
-    placeholder: "Region... (search or pick)",
+    placeholder: "All regions",
     onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
   });
   registerCombo("filterCity", {
@@ -515,7 +515,7 @@ function renderListingsView(isAdmin) {
     setSelected: (arr) => { filterCities = arr; },
     multi: true,
     allowCreate: false,
-    placeholder: "City / Municipality... (search or pick)",
+    placeholder: "All cities/municipalities",
     onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
   });
   registerCombo("filterCategory", {
@@ -524,7 +524,7 @@ function renderListingsView(isAdmin) {
     setSelected: (arr) => { filterCategories = arr.map((label) => CATEGORIES.find((c) => c.label === label).id); },
     multi: true,
     allowCreate: false,
-    placeholder: "Category... (search or pick)",
+    placeholder: "All categories",
     onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
   });
   registerCombo("filterStatus", {
@@ -533,7 +533,7 @@ function renderListingsView(isAdmin) {
     setSelected: (arr) => { filterStatuses = arr; },
     multi: true,
     allowCreate: false,
-    placeholder: "Status... (search or pick)",
+    placeholder: "All statuses",
     onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
   });
   comboRefresh("filterRegion");
