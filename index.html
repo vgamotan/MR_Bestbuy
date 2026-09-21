@@ -95,6 +95,9 @@
   .spacer { flex: 1; }
   .list { padding: 0 32px; }
   .row { border-bottom: 1px solid #E4DDCF; padding: 16px 4px; display: flex; align-items: center; gap: 14px; cursor: pointer; }
+  .row-top { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
+  .row-bottom { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+  .row-chevron { color: #6B6558; }
   .row:hover { background: rgba(22,56,50,0.03); }
   .tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid #163832; color: #163832; white-space: nowrap; }
   .row-main { flex: 1; min-width: 0; }
@@ -196,6 +199,32 @@
   table.logtable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   table.logtable th { text-align: left; font-size: 10.5px; text-transform: uppercase; color: #6B6558; border-bottom: 1px solid #E4DDCF; padding: 8px 6px; }
   table.logtable td { border-bottom: 1px solid #EFEAE0; padding: 8px 6px; color: #4A463D; }
+  /* ---- Mobile ---- */
+  @media (max-width: 640px) {
+    .masthead { padding: 18px 16px 14px; }
+    .masthead h1 { font-size: 21px; }
+    .toolbar { padding: 14px 16px; }
+    .price-slider-row { padding: 4px 16px 16px; }
+    .list { padding: 0 16px; }
+    .panel { padding: 18px 16px; }
+
+    .row { flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 2px; }
+    .row-top { align-items: flex-start; }
+    .row-title { font-size: 15px; line-height: 1.3; }
+    .row-bottom { justify-content: space-between; flex-wrap: wrap; gap: 8px; padding-left: 34px; }
+    .price { text-align: left; }
+    .price .label { display: inline; margin-left: 4px; }
+
+    .detail-grid { grid-template-columns: 1fr 1fr; }
+    .row2, .row3 { grid-template-columns: 1fr; }
+    .modal { max-width: 100%; margin: 0 8px; }
+
+    .stat-row { flex-wrap: wrap; gap: 10px 16px; }
+    .tabs { overflow-x: auto; flex-wrap: nowrap; }
+    .tab { white-space: nowrap; }
+
+    .combo-filter-wrap { flex: 1 1 45%; max-width: none; }
+  }
 </style>
 </head>
 <body>
@@ -730,19 +759,23 @@ function renderListRows(isAdmin) {
     return `
       <div>
         <div class="row" data-id="${l.id}" data-action="toggle">
-          <span class="tag">${categoryLabel(l.category)}</span>
-          <div class="row-main">
-            <div class="row-title">${escapeHtml(l.property_code || "No code")} — ${escapeHtml(l.owner_name)}</div>
-            <div class="row-meta">📍 ${l.barangay ? escapeHtml(l.barangay) + ", " : ""}${escapeHtml(l.municipality)}${l.lot_area ? " · " + escapeHtml(l.lot_area) + " sqm" : ""}</div>
+          <div class="row-top">
+            <span class="tag">${categoryLabel(l.category)}</span>
+            <div class="row-main">
+              <div class="row-title">${escapeHtml(l.property_code || "No code")} — ${escapeHtml(l.owner_name)}</div>
+              <div class="row-meta">📍 ${l.barangay ? escapeHtml(l.barangay) + ", " : ""}${escapeHtml(l.municipality)}${l.lot_area ? " · " + escapeHtml(l.lot_area) + " sqm" : ""}</div>
+            </div>
           </div>
-          <div class="price">${l.selling_price ? "₱" + formatMoney(l.selling_price) : "—"}<span class="label">Selling</span></div>
-          <span class="status-pill" style="background:${statusColor(l.status)}">${l.status}</span>
-          ${isAdmin ? `
-            <div class="row-actions" data-stop="1">
-              <button class="icon-btn" data-id="${l.id}" data-action="edit" title="Edit">✏️</button>
-              <button class="icon-btn" data-id="${l.id}" data-action="archive" title="Archive">🗄️</button>
-            </div>` : ""}
-          <span style="color:#6B6558;">${open ? "▲" : "▼"}</span>
+          <div class="row-bottom">
+            <div class="price">${l.selling_price ? "₱" + formatMoney(l.selling_price) : "—"}<span class="label">Selling</span></div>
+            <span class="status-pill" style="background:${statusColor(l.status)}">${l.status}</span>
+            ${isAdmin ? `
+              <div class="row-actions" data-stop="1">
+                <button class="icon-btn" data-id="${l.id}" data-action="edit" title="Edit">✏️</button>
+                <button class="icon-btn" data-id="${l.id}" data-action="archive" title="Archive">🗄️</button>
+              </div>` : ""}
+            <span class="row-chevron">${open ? "▲" : "▼"}</span>
+          </div>
         </div>
         ${open ? `
           <div class="detail">
