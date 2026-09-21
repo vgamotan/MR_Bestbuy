@@ -142,6 +142,12 @@ let profilesById = {};
 function categoryLabel(id) { const c = CATEGORIES.find((x) => x.id === id); return c ? c.label : id; }
 function statusColor(s) { return { Available: "#1F7A4D", Reserved: "#B98B2A", Sold: "#8A8478" }[s] || "#8A8478"; }
 function photoList(str) { return (str || "").split("\n").map((s) => s.trim()).filter(Boolean); }
+function formatMoney(v) {
+  if (!v) return null;
+  const num = parseFloat(String(v).replace(/,/g, ""));
+  if (isNaN(num)) return escapeHtml(v); // fallback: show as-typed if it's not a clean number
+  return num.toLocaleString("en-PH");
+}
 
 // =====================================================================
 // AUTH
@@ -374,7 +380,7 @@ function renderListRows(isAdmin) {
             <div class="row-title">${escapeHtml(l.property_code || "No code")} — ${escapeHtml(l.owner_name)}</div>
             <div class="row-meta">📍 ${l.barangay ? escapeHtml(l.barangay) + ", " : ""}${escapeHtml(l.municipality)}${l.lot_area ? " · " + escapeHtml(l.lot_area) + " sqm" : ""}</div>
           </div>
-          <div class="price">${l.selling_price ? "₱" + escapeHtml(l.selling_price) : "—"}<span class="label">Selling</span></div>
+          <div class="price">${l.selling_price ? "₱" + formatMoney(l.selling_price) : "—"}<span class="label">Selling</span></div>
           <span class="status-pill" style="background:${statusColor(l.status)}">${l.status}</span>
           ${isAdmin ? `
             <div class="row-actions" data-stop="1">
@@ -394,7 +400,7 @@ function renderListRows(isAdmin) {
               <div><b>Title No.</b>${escapeHtml(l.title_no) || "—"}</div>
               <div><b>Tax Dec No.</b>${escapeHtml(l.tax_dec_no) || "—"}</div>
               <div><b>Lot Area</b>${escapeHtml(l.lot_area) || "—"}</div>
-              <div><b>ATS Price</b>${l.ats_price ? "₱" + escapeHtml(l.ats_price) : "—"}</div>
+              <div><b>ATS Price</b>${l.ats_price ? "₱" + formatMoney(l.ats_price) : "—"}</div>
             </div>
             <div class="detail-section-title">Agent Hierarchy</div>
             <div class="detail-grid">
