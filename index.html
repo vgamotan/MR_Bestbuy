@@ -25,6 +25,18 @@
     "Ronda","Samboan","San Fernando","San Francisco","San Remigio","Santa Fe","Santander",
     "Sibonga","Sogod","Tabogon","Tabuelan","Talisay City","Toledo City","Tuburan","Tudela",
   ];
+  const CEBU_REGIONS = {
+    "Metro Cebu": ["Cebu City","Mandaue City","Lapu-Lapu City","Talisay City","Consolacion","Liloan","Cordova","Minglanilla","Compostela","Naga City"],
+    "North Cebu": ["Danao City","Carmen","Catmon","Sogod","Borbon","Tabogon","San Remigio","Bogo City","Medellin","Daanbantayan"],
+    "South Cebu": ["Carcar City","San Fernando","Sibonga","Argao","Dalaguete","Alcoy","Boljoon","Oslob","Santander","Samboan","Ginatilan","Malabuyoc","Alegria","Moalboal","Badian","Alcantara","Ronda","Dumanjug","Barili"],
+    "West Cebu": ["Toledo City","Balamban","Asturias","Tabuelan","Pinamungajan","Aloguinsan","Tuburan"],
+    "Camotes & Bantayan Islands": ["Bantayan","Madridejos","Santa Fe","Poro","Pilar","San Francisco","Tudela"],
+  };
+  const REGION_NAMES = Object.keys(CEBU_REGIONS);
+  function regionForMunicipality(m) {
+    for (const region of REGION_NAMES) if (CEBU_REGIONS[region].includes(m)) return region;
+    return "Other";
+  }
   const CATEGORIES = [
     { id: "raw_land", label: "Raw Land" },
     { id: "house_and_lot", label: "House and Lot" },
@@ -90,6 +102,19 @@
   .errline { color: #B23B3B; font-size: 12.5px; margin-top: 8px; }
   .msg { font-size: 12.5px; color: #163832; margin-top: 8px; }
   .import-input { display: none; }
+  /* Combobox (search + dropdown + multi-select) */
+  .combo { position: relative; }
+  .combo-input { width: 100%; border: 1px solid #E4DDCF; background: #fff; border-radius: 3px; padding: 7px 10px; font-size: 13px; color: #2A2721; box-sizing: border-box; }
+  .combo-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 40; background: #fff; border: 1px solid #E4DDCF; border-top: none; border-radius: 0 0 3px 3px; max-height: 220px; overflow-y: auto; box-shadow: 0 4px 10px rgba(0,0,0,0.08); }
+  .combo-option { padding: 7px 10px; font-size: 13px; cursor: pointer; }
+  .combo-option:hover { background: rgba(22,56,50,0.06); }
+  .combo-option.selected { color: #163832; font-weight: 600; }
+  .combo-create { color: #B98B2A; border-top: 1px solid #E4DDCF; }
+  .combo-empty { padding: 7px 10px; font-size: 12.5px; color: #6B6558; }
+  .combo-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+  .combo-chip { display: inline-flex; align-items: center; gap: 4px; background: #163832; color: #FAF7F1; font-size: 11.5px; padding: 3px 6px 3px 9px; border-radius: 999px; }
+  .combo-chip button { background: none; border: none; color: #FAF7F1; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
+  .combo-filter-wrap { min-width: 190px; }
   .hidden { display: none !important; }
 
   /* Auth screen */
@@ -133,15 +158,168 @@ let profile = null;
 let listings = [];
 let expandedId = null;
 let editingId = null;
-let adminTab = "listings"; // listings | approvals | reports
+let adminTab = "listings"; // listings | archive | approvals | reports
 let searchLogTimer = null;
 let pendingProfiles = [];
 let searchLogs = [];
 let profilesById = {};
+let agentNames = []; // shared lookup pool for Site Locator / Recruited By / Unit Manager / Division Manager / Sub Broker
+let filterRegions = []; // multi-select
+let filterCities = [];  // multi-select
+let formValues = {};    // in-progress Add/Edit form state for combobox-controlled fields
 
 function categoryLabel(id) { const c = CATEGORIES.find((x) => x.id === id); return c ? c.label : id; }
 function statusColor(s) { return { Available: "#1F7A4D", Reserved: "#B98B2A", Sold: "#8A8478" }[s] || "#8A8478"; }
 function photoList(str) { return (str || "").split("\n").map((s) => s.trim()).filter(Boolean); }
+function driveFileId(url) {
+  if (!url) return null;
+  let m = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);       // .../file/d/FILE_ID/view
+  if (m) return m[1];
+  m = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);                 // ...?id=FILE_ID or open?id=FILE_ID
+  if (m) return m[1];
+  return null;
+}
+function driveImageSrc(url) {
+  const id = driveFileId(url);
+  return id ? `https://lh3.googleusercontent.com/d/${id}` : url; // falls back to raw url if not recognized
+}
+function isDriveLink(url) { return /drive\.google\.com/i.test(url || ""); }
+
+// =====================================================================
+// COMBOBOX ENGINE — reusable search + dropdown + multi-select + create
+// =====================================================================
+const comboRegistry = {}; // id -> { options(): string[], getSelected(): string[], setSelected(arr), multi, allowCreate, onCreate?(name), onChange?(), placeholder }
+const comboUi = {};       // id -> { query: string, open: boolean }
+
+function registerCombo(id, config) {
+  comboRegistry[id] = config;
+  if (!comboUi[id]) comboUi[id] = { query: "", open: false };
+}
+function comboFilteredOptions(id) {
+  const cfg = comboRegistry[id];
+  const opts = cfg.options();
+  const q = comboUi[id].query.trim().toLowerCase();
+  return q ? opts.filter((o) => o.toLowerCase().includes(q)) : opts;
+}
+function comboHTML(id) {
+  const cfg = comboRegistry[id];
+  const ui = comboUi[id];
+  const selected = cfg.getSelected();
+  const filtered = comboFilteredOptions(id);
+  const queryTrim = ui.query.trim();
+  const exactMatch = cfg.options().some((o) => o.toLowerCase() === queryTrim.toLowerCase());
+  const showCreate = cfg.allowCreate && queryTrim && !exactMatch;
+  const inputValue = cfg.multi ? ui.query : (ui.open ? ui.query : (selected[0] || ""));
+  const chips = cfg.multi && selected.length
+    ? `<div class="combo-chips">${selected.map((v) => `<span class="combo-chip">${escapeHtml(v)}<button type="button" data-combo-remove="${id}" data-value="${escapeHtml(v)}">&times;</button></span>`).join("")}</div>`
+    : "";
+  return `<div class="combo">
+    ${chips}
+    <input class="combo-input" data-combo-input="${id}" placeholder="${escapeHtml(cfg.placeholder || "Search...")}" value="${escapeHtml(inputValue)}" autocomplete="off" />
+    ${ui.open ? `<div class="combo-dropdown">
+      ${filtered.map((o) => `<div class="combo-option${selected.includes(o) ? " selected" : ""}" data-combo-option="${id}" data-value="${escapeHtml(o)}">${cfg.multi ? (selected.includes(o) ? "☑ " : "☐ ") : ""}${escapeHtml(o)}</div>`).join("")}
+      ${showCreate ? `<div class="combo-option combo-create" data-combo-create="${id}">+ Add "${escapeHtml(queryTrim)}"</div>` : ""}
+      ${filtered.length === 0 && !showCreate ? '<div class="combo-empty">No matches</div>' : ""}
+    </div>` : ""}
+  </div>`;
+}
+function comboRefresh(id) {
+  const el = document.querySelector(`[data-combo-wrap="${id}"]`);
+  if (el) el.innerHTML = comboHTML(id);
+}
+function focusComboInput(id) {
+  const inp = document.querySelector(`[data-combo-input="${id}"]`);
+  if (inp) { inp.focus(); const v = inp.value; inp.setSelectionRange(v.length, v.length); }
+}
+document.addEventListener("input", (e) => {
+  const inp = e.target.closest("[data-combo-input]");
+  if (!inp) return;
+  const id = inp.dataset.comboInput;
+  comboUi[id].query = inp.value;
+  comboUi[id].open = true;
+  comboRefresh(id);
+  focusComboInput(id);
+});
+document.addEventListener("focusin", (e) => {
+  const inp = e.target.closest("[data-combo-input]");
+  if (!inp) return;
+  const id = inp.dataset.comboInput;
+  if (!comboUi[id].open) {
+    comboUi[id].open = true;
+    comboRefresh(id);
+    focusComboInput(id);
+  }
+});
+document.addEventListener("click", (e) => {
+  const opt = e.target.closest("[data-combo-option]");
+  if (opt) {
+    const id = opt.dataset.comboOption;
+    const value = opt.dataset.value;
+    const cfg = comboRegistry[id];
+    let selected = cfg.getSelected();
+    if (cfg.multi) {
+      selected = selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value];
+      cfg.setSelected(selected);
+      comboUi[id].query = "";
+    } else {
+      cfg.setSelected([value]);
+      comboUi[id].open = false;
+      comboUi[id].query = "";
+    }
+    if (cfg.onChange) cfg.onChange();
+    comboRefresh(id);
+    return;
+  }
+  const create = e.target.closest("[data-combo-create]");
+  if (create) {
+    const id = create.dataset.comboCreate;
+    const cfg = comboRegistry[id];
+    const newVal = comboUi[id].query.trim();
+    if (!newVal) return;
+    const finish = () => {
+      let selected = cfg.getSelected();
+      selected = cfg.multi ? [...selected, newVal] : [newVal];
+      cfg.setSelected(selected);
+      comboUi[id].query = "";
+      comboUi[id].open = !!cfg.multi;
+      if (cfg.onChange) cfg.onChange();
+      comboRefresh(id);
+    };
+    if (cfg.onCreate) cfg.onCreate(newVal).then(finish).catch(finish);
+    else finish();
+    return;
+  }
+  const remove = e.target.closest("[data-combo-remove]");
+  if (remove) {
+    const id = remove.dataset.comboRemove;
+    const value = remove.dataset.value;
+    const cfg = comboRegistry[id];
+    cfg.setSelected(cfg.getSelected().filter((v) => v !== value));
+    if (cfg.onChange) cfg.onChange();
+    comboRefresh(id);
+    return;
+  }
+  if (!e.target.closest(".combo")) {
+    let changed = false;
+    Object.keys(comboUi).forEach((id) => {
+      if (comboUi[id].open) { comboUi[id].open = false; comboUi[id].query = ""; changed = true; }
+    });
+    if (changed) Object.keys(comboRegistry).forEach((id) => comboRefresh(id));
+  }
+});
+async function loadAgentNames() {
+  try {
+    const { data, error } = await sb.from("agent_directory").select("name").order("name");
+    if (!error && data) agentNames = data.map((r) => r.name);
+  } catch (e) { console.error("could not load agent directory", e); }
+}
+async function createAgentName(name) {
+  agentNames = [...new Set([...agentNames, name])].sort();
+  try {
+    await sb.from("agent_directory").insert({ name });
+  } catch (e) { console.error("could not save new agent name", e); }
+}
+
 function formatMoney(v) {
   if (!v) return null;
   const num = parseFloat(String(v).replace(/,/g, ""));
@@ -242,6 +420,7 @@ function renderApp() {
     ${isAdmin ? `
       <div class="tabs">
         <div class="tab ${adminTab === "listings" ? "active" : ""}" data-tab="listings">Listings</div>
+        <div class="tab ${adminTab === "archive" ? "active" : ""}" data-tab="archive">Archive</div>
         <div class="tab ${adminTab === "approvals" ? "active" : ""}" data-tab="approvals">Pending Approvals</div>
         <div class="tab ${adminTab === "reports" ? "active" : ""}" data-tab="reports">Search Reports</div>
       </div>` : ""}
@@ -255,6 +434,7 @@ function renderApp() {
     }));
   }
   if (!isAdmin || adminTab === "listings") renderListingsView(isAdmin);
+  else if (adminTab === "archive") renderArchiveView();
   else if (adminTab === "approvals") renderApprovalsView();
   else if (adminTab === "reports") renderReportsView();
 }
@@ -266,7 +446,8 @@ function renderListingsView(isAdmin) {
   const body = $("tabBody");
   body.innerHTML = `
     <div class="toolbar">
-      <select class="field" id="filterLocation"><option value="All">All locations</option></select>
+      <div class="combo-filter-wrap" data-combo-wrap="filterRegion"></div>
+      <div class="combo-filter-wrap" data-combo-wrap="filterCity"></div>
       <select class="field" id="filterCategory"><option value="All">All categories</option></select>
       <select class="field" id="filterStatus"><option value="All">All statuses</option></select>
       <div class="searchbox">🔎 <input id="searchInput" placeholder="Search code, owner, address, title..." /></div>
@@ -284,16 +465,37 @@ function renderListingsView(isAdmin) {
     el.innerHTML = (withAll ? `<option value="All">${withAll}</option>` : "") +
       options.map((o) => typeof o === "string" ? `<option value="${o}">${o}</option>` : `<option value="${o.id}">${o.label}</option>`).join("");
   };
-  populateSelect($("filterLocation"), CEBU_LOCATIONS, "All locations");
   populateSelect($("filterCategory"), CATEGORIES, "All categories");
   populateSelect($("filterStatus"), STATUSES, "All statuses");
 
-  ["filterLocation", "filterCategory", "filterStatus"].forEach((id) => $(id).addEventListener("change", () => { renderListRows(isAdmin); logSearchDebounced(); }));
+  registerCombo("filterRegion", {
+    options: () => REGION_NAMES,
+    getSelected: () => filterRegions,
+    setSelected: (arr) => { filterRegions = arr; },
+    multi: true,
+    allowCreate: false,
+    placeholder: "Region... (search or pick)",
+    onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
+  });
+  registerCombo("filterCity", {
+    options: () => CEBU_LOCATIONS,
+    getSelected: () => filterCities,
+    setSelected: (arr) => { filterCities = arr; },
+    multi: true,
+    allowCreate: false,
+    placeholder: "City / Municipality... (search or pick)",
+    onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
+  });
+  comboRefresh("filterRegion");
+  comboRefresh("filterCity");
+
+  ["filterCategory", "filterStatus"].forEach((id) => $(id).addEventListener("change", () => { renderListRows(isAdmin); logSearchDebounced(); }));
   $("searchInput").addEventListener("input", () => { renderListRows(isAdmin); logSearchDebounced(); });
   $("exportBtn").addEventListener("click", exportCSV);
   if (isAdmin) {
     $("addBtn").addEventListener("click", openAdd);
     $("importInput").addEventListener("change", handleImportFile);
+    loadAgentNames();
   }
   $("listContainer").addEventListener("click", (e) => {
     const actionEl = e.target.closest("[data-action]");
@@ -305,19 +507,19 @@ function renderListingsView(isAdmin) {
       expandedId = expandedId === id ? null : id;
       renderListRows(isAdmin);
     } else if (action === "edit") openEdit(listings.find((l) => l.id === id));
-    else if (action === "delete") deleteListing(id);
+    else if (action === "archive") archiveListing(id);
   });
 
   loadListings(isAdmin);
 }
 
 function getFiltered() {
-  const location = $("filterLocation") ? $("filterLocation").value : "All";
   const category = $("filterCategory") ? $("filterCategory").value : "All";
   const status = $("filterStatus") ? $("filterStatus").value : "All";
   const q = $("searchInput") ? $("searchInput").value.trim().toLowerCase() : "";
   return listings.filter((l) => {
-    if (location !== "All" && l.municipality !== location) return false;
+    if (filterRegions.length && !filterRegions.includes(regionForMunicipality(l.municipality))) return false;
+    if (filterCities.length && !filterCities.includes(l.municipality)) return false;
     if (category !== "All" && l.category !== category) return false;
     if (status !== "All" && l.status !== status) return false;
     if (q) {
@@ -330,7 +532,7 @@ function getFiltered() {
 
 async function loadListings(isAdmin) {
   try {
-    const { data, error } = await sb.from("listings").select("*").order("created_at", { ascending: false });
+    const { data, error } = await sb.from("listings").select("*").eq("archived", false).order("created_at", { ascending: false });
     if (error) throw error;
     listings = data || [];
     showError("");
@@ -384,8 +586,8 @@ function renderListRows(isAdmin) {
           <span class="status-pill" style="background:${statusColor(l.status)}">${l.status}</span>
           ${isAdmin ? `
             <div class="row-actions" data-stop="1">
-              <button class="icon-btn" data-id="${l.id}" data-action="edit">✏️</button>
-              <button class="icon-btn" data-id="${l.id}" data-action="delete">🗑️</button>
+              <button class="icon-btn" data-id="${l.id}" data-action="edit" title="Edit">✏️</button>
+              <button class="icon-btn" data-id="${l.id}" data-action="archive" title="Archive">🗄️</button>
             </div>` : ""}
           <span style="color:#6B6558;">${open ? "▲" : "▼"}</span>
         </div>
@@ -413,7 +615,7 @@ function renderListRows(isAdmin) {
             ${l.remarks ? `<div class="detail-section-title">Remarks</div><div>${escapeHtml(l.remarks)}</div>` : ""}
             ${photoList(l.photo_urls).length ? `
               <div class="detail-section-title">Photos</div>
-              <div class="photo-strip">${photoList(l.photo_urls).map((u) => `<a href="${escapeHtml(u)}" target="_blank"><img src="${escapeHtml(u)}" /></a>`).join("")}</div>
+              <div class="photo-strip">${photoList(l.photo_urls).map((u) => `<a href="${escapeHtml(u)}" target="_blank"><img src="${escapeHtml(driveImageSrc(u))}" onerror="this.style.opacity='0.25'" /></a>`).join("")}</div>
             ` : ""}
           </div>` : ""}
       </div>`;
@@ -427,17 +629,17 @@ function logSearchDebounced() {
 }
 async function logSearchNow() {
   if (!session) return;
-  const location = $("filterLocation") ? $("filterLocation").value : "All";
+  const locationLabel = [...filterRegions, ...filterCities].join(", ") || "All";
   const category = $("filterCategory") ? $("filterCategory").value : "All";
   const status = $("filterStatus") ? $("filterStatus").value : "All";
   const q = $("searchInput") ? $("searchInput").value.trim() : "";
-  if (!q && location === "All" && category === "All" && status === "All") return; // skip logging empty/default state
+  if (!q && filterRegions.length === 0 && filterCities.length === 0 && category === "All" && status === "All") return; // skip logging empty/default state
   const resultsCount = getFiltered().length;
   try {
     await sb.from("search_logs").insert({
       user_id: session.user.id,
       query_text: q,
-      filter_location: location,
+      filter_location: locationLabel,
       filter_category: category,
       filter_status: status,
       results_count: resultsCount,
@@ -447,9 +649,16 @@ async function logSearchNow() {
 
 // ---- CRUD (admin only, but functions are harmless if RLS blocks them) ----
 const FIELD_IDS = [
-  "property_code","registration_date","owner_name","contact_no","address","municipality","barangay",
+  "property_code","registration_date","owner_name","contact_no","address","barangay",
   "category","status","lot_no","title_no","tax_dec_no","lot_area","ats_price","selling_price",
-  "site_locator","recruited_by","unit_manager","division_manager","sub_broker","remarks","photo_urls",
+  "remarks","photo_urls",
+];
+const AGENT_ROLE_FIELDS = [
+  { id: "site_locator", label: "Site Locator" },
+  { id: "recruited_by", label: "Recruited By" },
+  { id: "unit_manager", label: "Unit Manager" },
+  { id: "division_manager", label: "Division Manager" },
+  { id: "sub_broker", label: "Sub Broker" },
 ];
 function emptyForm() {
   return { property_code: "", registration_date: "", owner_name: "", contact_no: "", address: "",
@@ -462,6 +671,14 @@ function openAdd() { editingId = null; openFormModal(emptyForm(), "Add listing",
 function openEdit(item) { editingId = item.id; openFormModal(item, "Edit listing", "Save changes"); }
 
 function openFormModal(values, title, submitLabel) {
+  formValues = {
+    municipality: values.municipality || "Cebu City",
+    site_locator: values.site_locator || "",
+    recruited_by: values.recruited_by || "",
+    unit_manager: values.unit_manager || "",
+    division_manager: values.division_manager || "",
+    sub_broker: values.sub_broker || "",
+  };
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
   backdrop.innerHTML = `
@@ -477,7 +694,11 @@ function openFormModal(values, title, submitLabel) {
       </div>
       <label>Address</label><input id="f_address" />
       <div class="row3">
-        <div><label>Municipality / City</label><select class="field" id="f_municipality" style="width:100%"></select></div>
+        <div>
+          <label>Municipality / City</label>
+          <div data-combo-wrap="modal_municipality"></div>
+          <div style="font-size:11px; color:#6B6558; margin-top:4px;" id="modalRegionDisplay"></div>
+        </div>
         <div><label>Barangay</label><input id="f_barangay" /></div>
         <div><label>Category</label><select class="field" id="f_category" style="width:100%"></select></div>
       </div>
@@ -495,17 +716,17 @@ function openFormModal(values, title, submitLabel) {
       </div>
       <label>Status</label><select class="field" id="f_status" style="width:100%"></select>
       <div class="section-title">Agent Hierarchy</div>
+      <div style="font-size:11.5px; color:#6B6558; margin-bottom:6px;">Search and pick an existing name, or type a new one and choose "+ Add" — new names are saved to the shared directory automatically.</div>
       <div class="row2">
-        <div><label>Site Locator</label><input id="f_site_locator" /></div>
-        <div><label>Recruited By</label><input id="f_recruited_by" /></div>
+        ${AGENT_ROLE_FIELDS.slice(0, 2).map((f) => `<div><label>${f.label}</label><div data-combo-wrap="modal_${f.id}"></div></div>`).join("")}
       </div>
       <div class="row3">
-        <div><label>Unit Manager</label><input id="f_unit_manager" /></div>
-        <div><label>Division Manager</label><input id="f_division_manager" /></div>
-        <div><label>Sub Broker</label><input id="f_sub_broker" /></div>
+        ${AGENT_ROLE_FIELDS.slice(2).map((f) => `<div><label>${f.label}</label><div data-combo-wrap="modal_${f.id}"></div></div>`).join("")}
       </div>
       <div class="section-title">Photos & Remarks</div>
-      <label>Photo URLs (one per line)</label><textarea id="f_photo_urls"></textarea>
+      <label>Google Drive photo links (one per line)</label>
+      <textarea id="f_photo_urls" placeholder="https://drive.google.com/file/d/.../view?usp=sharing"></textarea>
+      <div style="font-size:11.5px; color:#6B6558; margin-top:2px;">Set each file's sharing to "Anyone with the link" in Google Drive, or agents won't be able to view it.</div>
       <label>Remarks</label><textarea id="f_remarks"></textarea>
       <div class="modal-actions">
         <button type="button" class="btn secondary" id="cancelFormModal">Cancel</button>
@@ -515,10 +736,41 @@ function openFormModal(values, title, submitLabel) {
   document.body.appendChild(backdrop);
 
   const populateSelect = (el, options) => { el.innerHTML = options.map((o) => typeof o === "string" ? `<option value="${o}">${o}</option>` : `<option value="${o.id}">${o.label}</option>`).join(""); };
-  populateSelect(backdrop.querySelector("#f_municipality"), CEBU_LOCATIONS);
   populateSelect(backdrop.querySelector("#f_category"), CATEGORIES);
   populateSelect(backdrop.querySelector("#f_status"), STATUSES);
-  FIELD_IDS.forEach((id) => { backdrop.querySelector("#f_" + id).value = values[id] || ""; });
+  backdrop.querySelector("#f_category").value = values.category || "raw_land";
+  backdrop.querySelector("#f_status").value = values.status || "Available";
+  FIELD_IDS.filter((id) => id !== "category" && id !== "status").forEach((id) => {
+    backdrop.querySelector("#f_" + id).value = values[id] || "";
+  });
+
+  function updateRegionDisplay() {
+    const el = backdrop.querySelector("#modalRegionDisplay");
+    if (el) el.textContent = "Region: " + regionForMunicipality(formValues.municipality);
+  }
+  registerCombo("modal_municipality", {
+    options: () => CEBU_LOCATIONS,
+    getSelected: () => [formValues.municipality],
+    setSelected: (arr) => { formValues.municipality = arr[0] || "Cebu City"; updateRegionDisplay(); },
+    multi: false,
+    allowCreate: false,
+    placeholder: "Search municipality/city...",
+  });
+  comboRefresh("modal_municipality");
+  updateRegionDisplay();
+
+  AGENT_ROLE_FIELDS.forEach((f) => {
+    registerCombo("modal_" + f.id, {
+      options: () => agentNames,
+      getSelected: () => (formValues[f.id] ? [formValues[f.id]] : []),
+      setSelected: (arr) => { formValues[f.id] = arr[0] || ""; },
+      multi: false,
+      allowCreate: true,
+      onCreate: (name) => createAgentName(name),
+      placeholder: `Search or add ${f.label.toLowerCase()}...`,
+    });
+    comboRefresh("modal_" + f.id);
+  });
 
   const close = () => backdrop.remove();
   backdrop.querySelector("#closeFormModal").addEventListener("click", close);
@@ -528,7 +780,14 @@ function openFormModal(values, title, submitLabel) {
     e.preventDefault();
     const payload = {};
     FIELD_IDS.forEach((id) => { payload[id] = backdrop.querySelector("#f_" + id).value.trim(); });
+    payload.municipality = formValues.municipality;
+    AGENT_ROLE_FIELDS.forEach((f) => { payload[f.id] = formValues[f.id] || ""; });
     if (!payload.property_code || !payload.owner_name) return;
+    const badPhotos = photoList(payload.photo_urls).filter((u) => !isDriveLink(u));
+    if (badPhotos.length > 0) {
+      alert("Photo links must be Google Drive links (drive.google.com). Please fix or remove:\n\n" + badPhotos.join("\n"));
+      return;
+    }
     if (editingId) await updateListing(editingId, payload);
     else await createListing(payload);
     close();
@@ -545,10 +804,10 @@ async function updateListing(id, payload) {
   if (error) { showError("Could not save: " + error.message); return; }
   await loadListings(true);
 }
-async function deleteListing(id) {
-  if (!confirm("Delete this listing? This cannot be undone.")) return;
-  const { error } = await sb.from("listings").delete().eq("id", id);
-  if (error) { showError("Could not delete: " + error.message); return; }
+async function archiveListing(id) {
+  if (!confirm("Archive this listing? It will be hidden from the main list, and can be restored or permanently deleted from the Archive tab.")) return;
+  const { error } = await sb.from("listings").update({ archived: true, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) { showError("Could not archive: " + error.message); return; }
   await loadListings(true);
 }
 
@@ -611,15 +870,69 @@ function handleImportFile(e) {
         };
       }).filter((r) => r.property_code || r.owner_name);
       if (rows.length === 0) { alert('No valid rows found. Make sure the CSV has "propertyCode" or "ownerName" columns.'); return; }
-      if (confirm(`Import ${rows.length} listing(s)?`)) {
+      const nonDriveCount = rows.filter((r) => photoList(r.photo_urls).some((u) => !isDriveLink(u))).length;
+      const photoWarning = nonDriveCount > 0
+        ? `\n\nNote: ${nonDriveCount} row(s) have photo links that aren't Google Drive links — they'll be saved as-is but may not display correctly.`
+        : "";
+      if (confirm(`Import ${rows.length} listing(s)?${photoWarning}`)) {
         const { error } = await sb.from("listings").insert(rows);
         if (error) { showError("Import failed: " + error.message); return; }
+        // Register any new agent names from this batch into the shared directory
+        const newNames = new Set();
+        rows.forEach((r) => {
+          ["site_locator", "recruited_by", "unit_manager", "division_manager", "sub_broker"].forEach((k) => {
+            if (r[k] && !agentNames.includes(r[k])) newNames.add(r[k]);
+          });
+        });
+        for (const name of newNames) await createAgentName(name);
         await loadListings(true);
       }
     },
     error: () => alert("Could not read that file. Please check it is a valid CSV."),
   });
   e.target.value = "";
+}
+
+// =====================================================================
+// ADMIN: ARCHIVE (restore or permanently delete)
+// =====================================================================
+async function renderArchiveView() {
+  const body = $("tabBody");
+  body.innerHTML = `<div class="panel"><div id="archiveList">Loading…</div></div>`;
+  const { data, error } = await sb.from("listings").select("*").eq("archived", true).order("updated_at", { ascending: false });
+  if (error) { $("archiveList").innerHTML = `<div class="errline">Could not load: ${escapeHtml(error.message)}</div>`; return; }
+  const items = data || [];
+  const list = $("archiveList");
+  if (items.length === 0) {
+    list.innerHTML = `<div class="empty"><h3>Archive is empty</h3><p>Listings you archive from the main list will show up here, where you can restore them or delete them for good.</p></div>`;
+    return;
+  }
+  list.innerHTML = items.map((l) => `
+    <div class="card">
+      <div class="card-row">
+        <div>
+          <div style="font-family:Georgia,serif; font-size:15px; color:#163832;">${escapeHtml(l.property_code || "No code")} — ${escapeHtml(l.owner_name)}</div>
+          <div style="font-size:12.5px; color:#6B6558;">${escapeHtml(l.municipality)}${l.barangay ? ", " + escapeHtml(l.barangay) : ""} · ${categoryLabel(l.category)} · ${l.status}</div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn secondary" data-restore="${l.id}">Restore</button>
+          <button class="btn danger" data-permadelete="${l.id}">Delete permanently</button>
+        </div>
+      </div>
+    </div>`).join("");
+  list.querySelectorAll("[data-restore]").forEach((btn) => btn.addEventListener("click", () => restoreListing(btn.dataset.restore)));
+  list.querySelectorAll("[data-permadelete]").forEach((btn) => btn.addEventListener("click", () => permanentlyDeleteListing(btn.dataset.permadelete)));
+}
+async function restoreListing(id) {
+  const { error } = await sb.from("listings").update({ archived: false, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) { alert("Could not restore: " + error.message); return; }
+  renderArchiveView();
+}
+async function permanentlyDeleteListing(id) {
+  if (!confirm("Permanently delete this listing? This cannot be undone — it will not be recoverable from Archive.")) return;
+  const { error } = await sb.from("listings").delete().eq("id", id);
+  if (error) { alert("Could not delete: " + error.message); return; }
+  renderArchiveView();
 }
 
 // =====================================================================
@@ -688,7 +1001,13 @@ async function renderReportsView() {
     searchLogs.forEach((l) => { const k = keyFn(l); if (!k || k === "All") return; m[k] = (m[k] || 0) + 1; });
     return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
   };
-  const topLocations = countBy((l) => l.filter_location);
+  const topLocations = (() => {
+    const m = {};
+    searchLogs.forEach((l) => {
+      (l.filter_location || "").split(",").map((s) => s.trim()).filter((s) => s && s !== "All").forEach((tok) => { m[tok] = (m[tok] || 0) + 1; });
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  })();
   const topCategories = countBy((l) => l.filter_category ? categoryLabel(l.filter_category) : null);
   const byUser = {};
   searchLogs.forEach((l) => { byUser[l.user_id] = (byUser[l.user_id] || 0) + 1; });
