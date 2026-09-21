@@ -144,6 +144,31 @@
   .combo-chip { display: inline-flex; align-items: center; gap: 4px; background: #163832; color: #FAF7F1; font-size: 11.5px; padding: 3px 6px 3px 9px; border-radius: 999px; }
   .combo-chip button { background: none; border: none; color: #FAF7F1; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
   .combo-filter-wrap { flex: 1 1 190px; min-width: 170px; max-width: 240px; }
+  /* Price range slider */
+  .price-slider-row { padding: 4px 32px 18px; border-bottom: 1px solid #E4DDCF; }
+  .price-slider-inner { max-width: 480px; }
+  .price-slider-head { display: flex; align-items: baseline; gap: 12px; font-size: 12px; color: #6B6558; margin-bottom: 10px; }
+  .price-slider-head > span:first-child { font-family: Georgia, serif; font-size: 13px; color: #163832; }
+  .price-range-values { font-weight: 600; color: #163832; font-size: 13px; }
+  .price-reset-link { margin-left: auto; color: #B98B2A; text-decoration: underline; cursor: pointer; font-size: 12px; }
+  .range-slider { position: relative; height: 26px; }
+  .range-track { position: absolute; top: 12px; left: 0; right: 0; height: 3px; background: #E4DDCF; border-radius: 2px; }
+  .range-fill { position: absolute; top: 12px; height: 3px; background: #163832; border-radius: 2px; }
+  .range-slider input[type="range"] {
+    position: absolute; top: 5px; left: 0; width: 100%; margin: 0;
+    -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none;
+  }
+  .range-slider input[type="range"]::-webkit-slider-thumb {
+    pointer-events: auto; -webkit-appearance: none; appearance: none;
+    width: 15px; height: 15px; border-radius: 50%; background: #163832; border: 2px solid #FAF7F1;
+    box-shadow: 0 0 0 1px #163832; cursor: pointer; margin-top: -6px;
+  }
+  .range-slider input[type="range"]::-moz-range-thumb {
+    pointer-events: auto; width: 15px; height: 15px; border-radius: 50%; background: #163832;
+    border: 2px solid #FAF7F1; box-shadow: 0 0 0 1px #163832; cursor: pointer;
+  }
+  .range-slider input[type="range"]::-webkit-slider-runnable-track { background: transparent; height: 3px; }
+  .range-slider input[type="range"]::-moz-range-track { background: transparent; height: 3px; }
   .hidden { display: none !important; }
 
   /* Auth screen */
@@ -197,6 +222,10 @@ let filterRegions = [];   // multi-select
 let filterCities = [];    // multi-select
 let filterCategories = []; // multi-select, stores category ids
 let filterStatuses = [];   // multi-select
+let priceMin = null;      // current slider selection (Selling Price)
+let priceMax = null;
+let priceDataMin = 0;     // actual bounds from loaded listings
+let priceDataMax = 0;
 let formValues = {};    // in-progress Add/Edit form state for combobox-controlled fields
 
 function categoryLabel(id) { const c = CATEGORIES.find((x) => x.id === id); return c ? c.label : id; }
@@ -491,6 +520,7 @@ function renderListingsView(isAdmin) {
         <button class="btn" id="addBtn">+ Add listing</button>
       ` : ""}
     </div>
+    <div class="price-slider-row" id="priceSliderRow"></div>
     <div id="errBanner" class="errline" style="padding:10px 32px 0; display:none;"></div>
     <div class="list" id="listContainer"></div>
   `;
@@ -565,6 +595,72 @@ function renderListingsView(isAdmin) {
 }
 function filterCategoryLabels() { return filterCategories.map((id) => (CATEGORIES.find((c) => c.id === id) || {}).label).filter(Boolean); }
 
+// ---- Price range slider (Selling Price) ----
+function parsePrice(v) {
+  const n = parseFloat(String(v || "").replace(/,/g, ""));
+  return isNaN(n) ? null : n;
+}
+function computePriceBounds() {
+  const vals = listings.map((l) => parsePrice(l.selling_price)).filter((n) => n !== null);
+  priceDataMin = vals.length ? Math.min(...vals) : 0;
+  priceDataMax = vals.length ? Math.max(...vals) : 0;
+  if (priceDataMin === priceDataMax) priceDataMax = priceDataMin + 1; // avoid a zero-width slider
+  priceMin = priceDataMin;
+  priceMax = priceDataMax;
+}
+function sliderPriceLabel(n) {
+  if (n === null || n === undefined || isNaN(n)) return "0";
+  return Math.round(n).toLocaleString("en-PH");
+}
+function renderPriceSlider(isAdmin) {
+  const row = $("priceSliderRow");
+  if (!row) return;
+  const vals = listings.map((l) => parsePrice(l.selling_price)).filter((n) => n !== null);
+  if (vals.length === 0) { row.innerHTML = ""; return; }
+  row.innerHTML = `
+    <div class="price-slider-inner">
+      <div class="price-slider-head">
+        <span>Selling Price</span>
+        <span class="price-range-values">₱${sliderPriceLabel(priceMin)} – ₱${sliderPriceLabel(priceMax)}</span>
+        <a href="#" id="priceResetLink" class="price-reset-link">Reset</a>
+      </div>
+      <div class="range-slider">
+        <div class="range-track"></div>
+        <div class="range-fill" id="rangeFill"></div>
+        <input type="range" id="priceMinRange" min="${priceDataMin}" max="${priceDataMax}" value="${priceMin}" />
+        <input type="range" id="priceMaxRange" min="${priceDataMin}" max="${priceDataMax}" value="${priceMax}" />
+      </div>
+    </div>
+  `;
+  updateRangeFill();
+  const minEl = $("priceMinRange"), maxEl = $("priceMaxRange");
+  const onSlide = () => {
+    let a = parseFloat(minEl.value), b = parseFloat(maxEl.value);
+    if (a > b) { const t = a; a = b; b = t; }
+    priceMin = a; priceMax = b;
+    row.querySelector(".price-range-values").textContent = `₱${sliderPriceLabel(priceMin)} – ₱${sliderPriceLabel(priceMax)}`;
+    updateRangeFill();
+    renderListRows(isAdmin);
+    logSearchDebounced();
+  };
+  minEl.addEventListener("input", onSlide);
+  maxEl.addEventListener("input", onSlide);
+  $("priceResetLink").addEventListener("click", (e) => {
+    e.preventDefault();
+    priceMin = priceDataMin; priceMax = priceDataMax;
+    renderPriceSlider(isAdmin);
+    renderListRows(isAdmin);
+  });
+}
+function updateRangeFill() {
+  const fill = $("rangeFill");
+  if (!fill || priceDataMax === priceDataMin) return;
+  const leftPct = ((priceMin - priceDataMin) / (priceDataMax - priceDataMin)) * 100;
+  const rightPct = ((priceMax - priceDataMin) / (priceDataMax - priceDataMin)) * 100;
+  fill.style.left = leftPct + "%";
+  fill.style.width = (rightPct - leftPct) + "%";
+}
+
 function getFiltered() {
   const q = $("searchInput") ? $("searchInput").value.trim().toLowerCase() : "";
   return listings.filter((l) => {
@@ -572,6 +668,10 @@ function getFiltered() {
     if (filterCities.length && !filterCities.includes(l.municipality)) return false;
     if (filterCategories.length && !filterCategories.includes(l.category)) return false;
     if (filterStatuses.length && !filterStatuses.includes(l.status)) return false;
+    if (priceMin !== null && priceMax !== null && !(priceMin === priceDataMin && priceMax === priceDataMax)) {
+      const p = parsePrice(l.selling_price);
+      if (p === null || p < priceMin || p > priceMax) return false;
+    }
     if (q) {
       const hay = `${l.property_code||""} ${l.owner_name||""} ${l.address||""} ${l.municipality||""} ${l.barangay||""} ${l.lot_no||""} ${l.title_no||""}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -591,6 +691,8 @@ async function loadListings(isAdmin) {
     showError("Could not load listings: " + e.message);
     console.error(e);
   }
+  computePriceBounds();
+  renderPriceSlider(isAdmin);
   renderListRows(isAdmin);
 }
 
@@ -687,8 +789,9 @@ async function logSearchNow() {
   const locationLabel = [...filterRegions, ...filterCities].join(", ") || "All";
   const categoryLabelStr = filterCategoryLabels().join(", ") || "All";
   const statusLabelStr = filterStatuses.join(", ") || "All";
+  const priceActive = priceMin !== null && priceMax !== null && !(priceMin === priceDataMin && priceMax === priceDataMax);
   const q = $("searchInput") ? $("searchInput").value.trim() : "";
-  if (!q && filterRegions.length === 0 && filterCities.length === 0 && filterCategories.length === 0 && filterStatuses.length === 0) return; // skip logging empty/default state
+  if (!q && filterRegions.length === 0 && filterCities.length === 0 && filterCategories.length === 0 && filterStatuses.length === 0 && !priceActive) return; // skip logging empty/default state
   const resultsCount = getFiltered().length;
   try {
     await sb.from("search_logs").insert({
@@ -696,7 +799,7 @@ async function logSearchNow() {
       query_text: q,
       filter_location: locationLabel,
       filter_category: categoryLabelStr,
-      filter_status: statusLabelStr,
+      filter_status: priceActive ? `${statusLabelStr} | Price ${Math.round(priceMin)}-${Math.round(priceMax)}` : statusLabelStr,
       results_count: resultsCount,
     });
   } catch (e) { console.error("search log failed", e); }
