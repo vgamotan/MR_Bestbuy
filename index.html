@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MR Bestbuy Realty — Property Listings</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+<script>
+  // =====================================================================
+  // FILL THESE TWO IN before deploying — from Supabase Project Settings > API
+  // =====================================================================
+  const SUPABASE_URL = "https://zyrklohsegcjiqvelyjr.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_SnacWlVeRCN6OOg-dYsAxw_2Q2lfX6m";
+  // =====================================================================
+
+  const CEBU_LOCATIONS = [
+    "Alcantara","Alcoy","Alegria","Aloguinsan","Argao","Asturias","Badian","Balamban",
+    "Bantayan","Barili","Bogo City","Boljoon","Borbon","Carcar City","Carmen","Catmon",
+    "Cebu City","Compostela","Consolacion","Cordova","Daanbantayan","Dalaguete","Danao City",
+    "Dumanjug","Ginatilan","Lapu-Lapu City","Liloan","Madridejos","Malabuyoc","Mandaue City",
+    "Medellin","Minglanilla","Moalboal","Naga City","Oslob","Pilar","Pinamungajan","Poro",
+    "Ronda","Samboan","San Fernando","San Francisco","San Remigio","Santa Fe","Santander",
+    "Sibonga","Sogod","Tabogon","Tabuelan","Talisay City","Toledo City","Tuburan","Tudela",
+  ];
+  const CATEGORIES = [
+    { id: "raw_land", label: "Raw Land" },
+    { id: "house_and_lot", label: "House and Lot" },
+    { id: "commercial_lot", label: "Commercial Lot" },
+    { id: "industrial_lot", label: "Industrial Lot" },
+  ];
+  const STATUSES = ["Available", "Reserved", "Sold"];
+</script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #FAF7F1; color: #2A2721; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .masthead { border-bottom: 2px solid #163832; padding: 24px 32px 18px; display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 16px; }
+  .masthead h1 { font-family: Georgia, 'Iowan Old Style', serif; font-size: 26px; font-weight: 600; color: #163832; margin: 0 0 4px; }
+  .masthead .sub { font-size: 13px; color: #6B6558; max-width: 700px; }
+  .stat-row { display: flex; gap: 20px; font-size: 13px; color: #6B6558; }
+  .stat-row b { color: #163832; font-size: 15px; }
+  .userbox { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #6B6558; }
+  .rolebadge { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; padding: 3px 8px; border-radius: 999px; border: 1px solid #163832; color: #163832; }
+  .rolebadge.admin { background: #163832; color: #FAF7F1; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #163832; background: #163832; color: #FAF7F1; padding: 8px 14px; border-radius: 3px; font-size: 13px; cursor: pointer; }
+  .btn.secondary { background: transparent; color: #163832; }
+  .btn.ghost { background: transparent; border-color: #E4DDCF; color: #6B6558; }
+  .btn.danger { background: transparent; border-color: #B23B3B; color: #B23B3B; }
+  .tabs { display: flex; gap: 4px; padding: 14px 32px 0; border-bottom: 1px solid #E4DDCF; }
+  .tab { padding: 8px 16px; font-size: 13px; color: #6B6558; cursor: pointer; border-bottom: 2px solid transparent; }
+  .tab.active { color: #163832; border-bottom-color: #163832; font-weight: 600; }
+  .toolbar { padding: 18px 32px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid #E4DDCF; }
+  .field { border: 1px solid #E4DDCF; background: #fff; border-radius: 3px; padding: 7px 10px; font-size: 13px; color: #2A2721; }
+  .searchbox { display: flex; align-items: center; gap: 6px; border: 1px solid #E4DDCF; background: #fff; border-radius: 3px; padding: 6px 10px; flex: 1; min-width: 160px; }
+  .searchbox input { border: none; outline: none; font-size: 13px; flex: 1; background: transparent; width: 100%; }
+  .spacer { flex: 1; }
+  .list { padding: 0 32px; }
+  .row { border-bottom: 1px solid #E4DDCF; padding: 16px 4px; display: flex; align-items: center; gap: 14px; cursor: pointer; }
+  .row:hover { background: rgba(22,56,50,0.03); }
+  .tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid #163832; color: #163832; white-space: nowrap; }
+  .row-main { flex: 1; min-width: 0; }
+  .row-title { font-family: Georgia, serif; font-size: 15.5px; margin-bottom: 2px; }
+  .row-meta { font-size: 12.5px; color: #6B6558; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .price { font-size: 13.5px; color: #163832; font-weight: 600; white-space: nowrap; text-align: right; }
+  .price .label { display: block; font-size: 10px; color: #6B6558; font-weight: 400; text-transform: uppercase; }
+  .status-pill { font-size: 11px; padding: 3px 9px; border-radius: 999px; color: #fff; white-space: nowrap; }
+  .row-actions { display: flex; gap: 6px; }
+  .icon-btn { border: none; background: transparent; cursor: pointer; padding: 6px; color: #6B6558; font-size: 15px; }
+  .icon-btn:hover { color: #163832; }
+  .detail { padding: 14px 4px 22px 4px; font-size: 13px; color: #4A463D; border-bottom: 1px solid #E4DDCF; }
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .detail-grid div b { display: block; color: #163832; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
+  .detail-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #B98B2A; margin: 14px 0 6px; font-weight: 600; }
+  .photo-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .photo-strip img { width: 90px; height: 90px; object-fit: cover; border-radius: 3px; border: 1px solid #E4DDCF; }
+  .empty { text-align: center; padding: 80px 20px; color: #6B6558; }
+  .empty h3 { font-family: Georgia, serif; color: #163832; font-size: 20px; margin-bottom: 6px; }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(20,20,15,0.4); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+  .modal { background: #FAF7F1; border-radius: 4px; width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto; padding: 24px; border: 1px solid #E4DDCF; }
+  .modal h2 { font-family: Georgia, serif; color: #163832; font-size: 20px; margin: 0 0 16px; display: flex; justify-content: space-between; align-items: center; }
+  .modal label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: #6B6558; margin: 12px 0 4px; }
+  .modal input, .modal select, .modal textarea { width: 100%; border: 1px solid #E4DDCF; border-radius: 3px; padding: 8px 10px; font-size: 14px; background: #fff; color: #2A2721; font-family: inherit; }
+  .modal textarea { resize: vertical; min-height: 50px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .section-title { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px; color: #B98B2A; margin: 18px 0 2px; font-weight: 600; border-top: 1px solid #E4DDCF; padding-top: 12px; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end; }
+  .errline { color: #B23B3B; font-size: 12.5px; margin-top: 8px; }
+  .msg { font-size: 12.5px; color: #163832; margin-top: 8px; }
+  .import-input { display: none; }
+  .hidden { display: none !important; }
+
+  /* Auth screen */
+  .auth-wrap { max-width: 380px; margin: 80px auto; padding: 32px; background: #fff; border: 1px solid #E4DDCF; border-radius: 6px; }
+  .auth-wrap h1 { font-family: Georgia, serif; color: #163832; font-size: 22px; margin: 0 0 4px; text-align: center; }
+  .auth-wrap .sub { text-align: center; font-size: 12.5px; color: #6B6558; margin-bottom: 20px; }
+  .auth-wrap label { display: block; font-size: 11px; text-transform: uppercase; color: #6B6558; margin: 12px 0 4px; }
+  .auth-wrap input { width: 100%; border: 1px solid #E4DDCF; border-radius: 3px; padding: 9px 10px; font-size: 14px; box-sizing: border-box; }
+  .auth-wrap .btn { width: 100%; justify-content: center; margin-top: 18px; }
+  .switchline { text-align: center; font-size: 12.5px; color: #6B6558; margin-top: 14px; }
+  .switchline a { color: #163832; cursor: pointer; text-decoration: underline; }
+
+  /* Pending screen */
+  .pending-wrap { max-width: 420px; margin: 100px auto; text-align: center; padding: 0 20px; }
+  .pending-wrap h1 { font-family: Georgia, serif; color: #163832; font-size: 22px; }
+
+  /* Admin panels */
+  .panel { padding: 24px 32px; }
+  .card { background: #fff; border: 1px solid #E4DDCF; border-radius: 4px; padding: 16px 18px; margin-bottom: 14px; }
+  .card-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 14px; margin-bottom: 20px; }
+  .stat-card { background: #fff; border: 1px solid #E4DDCF; border-radius: 4px; padding: 16px; }
+  .stat-card .num { font-family: Georgia, serif; font-size: 26px; color: #163832; }
+  .stat-card .lbl { font-size: 11.5px; text-transform: uppercase; color: #6B6558; letter-spacing: 0.4px; }
+  table.logtable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.logtable th { text-align: left; font-size: 10.5px; text-transform: uppercase; color: #6B6558; border-bottom: 1px solid #E4DDCF; padding: 8px 6px; }
+  table.logtable td { border-bottom: 1px solid #EFEAE0; padding: 8px 6px; color: #4A463D; }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script>
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => s === null || s === undefined ? "" : String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let session = null;
+let profile = null;
+let listings = [];
+let expandedId = null;
+let editingId = null;
+let adminTab = "listings"; // listings | approvals | reports
+let searchLogTimer = null;
+let pendingProfiles = [];
+let searchLogs = [];
+let profilesById = {};
+
+function categoryLabel(id) { const c = CATEGORIES.find((x) => x.id === id); return c ? c.label : id; }
+function statusColor(s) { return { Available: "#1F7A4D", Reserved: "#B98B2A", Sold: "#8A8478" }[s] || "#8A8478"; }
+function photoList(str) { return (str || "").split("\n").map((s) => s.trim()).filter(Boolean); }
+
+// =====================================================================
+// AUTH
+// =====================================================================
+let authMode = "login"; // login | signup
+let authError = "";
+
+function renderAuth() {
+  $("root").innerHTML = `
+    <div class="auth-wrap">
+      <h1>MR Bestbuy Realty</h1>
+      <div class="sub">${authMode === "login" ? "Sign in to view property listings" : "Create your agent account"}</div>
+      ${authMode === "signup" ? `<label>Full name</label><input id="a_name" />` : ""}
+      <label>Email</label><input id="a_email" type="email" />
+      <label>Password</label><input id="a_password" type="password" />
+      ${authError ? `<div class="errline">${escapeHtml(authError)}</div>` : ""}
+      <button class="btn" id="authSubmit">${authMode === "login" ? "Sign in" : "Sign up"}</button>
+      <div class="switchline">
+        ${authMode === "login"
+          ? `Don't have an account? <a id="toSignup">Sign up</a>`
+          : `Already have an account? <a id="toLogin">Sign in</a>`}
+      </div>
+    </div>`;
+  $("authSubmit").addEventListener("click", handleAuthSubmit);
+  const toSignup = $("toSignup"); if (toSignup) toSignup.addEventListener("click", () => { authMode = "signup"; authError = ""; renderAuth(); });
+  const toLogin = $("toLogin"); if (toLogin) toLogin.addEventListener("click", () => { authMode = "login"; authError = ""; renderAuth(); });
+}
+
+async function handleAuthSubmit() {
+  const email = $("a_email").value.trim();
+  const password = $("a_password").value;
+  authError = "";
+  if (!email || !password) { authError = "Email and password are required."; renderAuth(); return; }
+  if (authMode === "signup") {
+    const fullName = $("a_name").value.trim();
+    const { error } = await sb.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
+    if (error) { authError = error.message; renderAuth(); return; }
+    authError = "";
+    alert("Account created. If email confirmation is required you'll get an email first — either way, an admin still needs to approve your account before you can view listings.");
+    authMode = "login";
+    renderAuth();
+  } else {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) { authError = error.message; renderAuth(); return; }
+    // onAuthStateChange will pick this up and boot the app
+  }
+}
+
+async function signOut() {
+  await sb.auth.signOut();
+  profile = null;
+  session = null;
+  authMode = "login";
+  renderAuth();
+}
+
+// =====================================================================
+// PENDING / REJECTED SCREEN
+// =====================================================================
+function renderPending() {
+  const isRejected = profile.status === "rejected";
+  $("root").innerHTML = `
+    <div class="pending-wrap">
+      <h1>${isRejected ? "Access not approved" : "Pending approval"}</h1>
+      <p style="color:#6B6558; font-size:14px;">
+        ${isRejected
+          ? "Your account request was not approved. Contact the admin if you think this is a mistake."
+          : "Your account is created but waiting on admin approval before you can view listings. Check back soon."}
+      </p>
+      <button class="btn secondary" id="pendingSignOut">Sign out</button>
+    </div>`;
+  $("pendingSignOut").addEventListener("click", signOut);
+}
+
+// =====================================================================
+// MAIN APP SHELL
+// =====================================================================
+function renderApp() {
+  const isAdmin = profile.role === "admin";
+  $("root").innerHTML = `
+    <div class="masthead">
+      <div>
+        <h1>MR Bestbuy Realty — Property Listings</h1>
+        <div class="sub">Cebu Province · Raw Land · House and Lot · Commercial Lot · Industrial Lot</div>
+      </div>
+      <div class="userbox">
+        <span>${escapeHtml(profile.full_name || profile.email)}</span>
+        <span class="rolebadge ${isAdmin ? "admin" : ""}">${isAdmin ? "Admin" : "Agent"}</span>
+        <button class="btn ghost" id="signOutBtn">Sign out</button>
+      </div>
+    </div>
+    ${isAdmin ? `
+      <div class="tabs">
+        <div class="tab ${adminTab === "listings" ? "active" : ""}" data-tab="listings">Listings</div>
+        <div class="tab ${adminTab === "approvals" ? "active" : ""}" data-tab="approvals">Pending Approvals</div>
+        <div class="tab ${adminTab === "reports" ? "active" : ""}" data-tab="reports">Search Reports</div>
+      </div>` : ""}
+    <div id="tabBody"></div>
+  `;
+  $("signOutBtn").addEventListener("click", signOut);
+  if (isAdmin) {
+    document.querySelectorAll(".tab").forEach((el) => el.addEventListener("click", () => {
+      adminTab = el.dataset.tab;
+      renderApp();
+    }));
+  }
+  if (!isAdmin || adminTab === "listings") renderListingsView(isAdmin);
+  else if (adminTab === "approvals") renderApprovalsView();
+  else if (adminTab === "reports") renderReportsView();
+}
+
+// =====================================================================
+// LISTINGS VIEW (agents: read-only; admin: full CRUD)
+// =====================================================================
+function renderListingsView(isAdmin) {
+  const body = $("tabBody");
+  body.innerHTML = `
+    <div class="toolbar">
+      <select class="field" id="filterLocation"><option value="All">All locations</option></select>
+      <select class="field" id="filterCategory"><option value="All">All categories</option></select>
+      <select class="field" id="filterStatus"><option value="All">All statuses</option></select>
+      <div class="searchbox">🔎 <input id="searchInput" placeholder="Search code, owner, address, title..." /></div>
+      <div class="spacer"></div>
+      <button class="btn secondary" id="exportBtn">⬇ Export CSV</button>
+      ${isAdmin ? `
+        <label class="btn secondary" style="margin:0">⬆ Import CSV<input class="import-input" type="file" accept=".csv" id="importInput" /></label>
+        <button class="btn" id="addBtn">+ Add listing</button>
+      ` : ""}
+    </div>
+    <div id="errBanner" class="errline" style="padding:10px 32px 0; display:none;"></div>
+    <div class="list" id="listContainer"></div>
+  `;
+  const populateSelect = (el, options, withAll) => {
+    el.innerHTML = (withAll ? `<option value="All">${withAll}</option>` : "") +
+      options.map((o) => typeof o === "string" ? `<option value="${o}">${o}</option>` : `<option value="${o.id}">${o.label}</option>`).join("");
+  };
+  populateSelect($("filterLocation"), CEBU_LOCATIONS, "All locations");
+  populateSelect($("filterCategory"), CATEGORIES, "All categories");
+  populateSelect($("filterStatus"), STATUSES, "All statuses");
+
+  ["filterLocation", "filterCategory", "filterStatus"].forEach((id) => $(id).addEventListener("change", () => { renderListRows(isAdmin); logSearchDebounced(); }));
+  $("searchInput").addEventListener("input", () => { renderListRows(isAdmin); logSearchDebounced(); });
+  $("exportBtn").addEventListener("click", exportCSV);
+  if (isAdmin) {
+    $("addBtn").addEventListener("click", openAdd);
+    $("importInput").addEventListener("change", handleImportFile);
+  }
+  $("listContainer").addEventListener("click", (e) => {
+    const actionEl = e.target.closest("[data-action]");
+    if (!actionEl) return;
+    const id = actionEl.dataset.id;
+    const action = actionEl.dataset.action;
+    if (action === "toggle") {
+      if (e.target.closest("[data-stop]")) return;
+      expandedId = expandedId === id ? null : id;
+      renderListRows(isAdmin);
+    } else if (action === "edit") openEdit(listings.find((l) => l.id === id));
+    else if (action === "delete") deleteListing(id);
+  });
+
+  loadListings(isAdmin);
+}
+
+function getFiltered() {
+  const location = $("filterLocation") ? $("filterLocation").value : "All";
+  const category = $("filterCategory") ? $("filterCategory").value : "All";
+  const status = $("filterStatus") ? $("filterStatus").value : "All";
+  const q = $("searchInput") ? $("searchInput").value.trim().toLowerCase() : "";
+  return listings.filter((l) => {
+    if (location !== "All" && l.municipality !== location) return false;
+    if (category !== "All" && l.category !== category) return false;
+    if (status !== "All" && l.status !== status) return false;
+    if (q) {
+      const hay = `${l.property_code||""} ${l.owner_name||""} ${l.address||""} ${l.municipality||""} ${l.barangay||""} ${l.lot_no||""} ${l.title_no||""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+async function loadListings(isAdmin) {
+  try {
+    const { data, error } = await sb.from("listings").select("*").order("created_at", { ascending: false });
+    if (error) throw error;
+    listings = data || [];
+    showError("");
+  } catch (e) {
+    showError("Could not load listings: " + e.message);
+    console.error(e);
+  }
+  renderListRows(isAdmin);
+}
+
+function showError(msg) {
+  const el = $("errBanner");
+  if (!el) return;
+  if (!msg) { el.style.display = "none"; return; }
+  el.style.display = "block";
+  el.textContent = msg;
+}
+
+function renderListRows(isAdmin) {
+  const counts = {
+    all: listings.length,
+    available: listings.filter((l) => l.status === "Available").length,
+    reserved: listings.filter((l) => l.status === "Reserved").length,
+    sold: listings.filter((l) => l.status === "Sold").length,
+  };
+  const filtered = getFiltered();
+  const container = $("listContainer");
+  if (!container) return;
+  if (listings.length === 0 || filtered.length === 0) {
+    container.innerHTML = `<div class="empty"><h3>${listings.length === 0 ? "No listings yet" : "No matches"}</h3><p>${
+      listings.length === 0
+        ? (isAdmin ? "Add your first property or import a CSV to get started." : "No listings have been added yet.")
+        : "Try clearing a filter or search term."
+    }</p></div>`;
+    return;
+  }
+  container.innerHTML = `<div style="padding:14px 4px 0; font-size:12.5px; color:#6B6558;">
+    <b style="color:#163832">${counts.all}</b> total &nbsp; <b style="color:#163832">${counts.available}</b> available &nbsp;
+    <b style="color:#163832">${counts.reserved}</b> reserved &nbsp; <b style="color:#163832">${counts.sold}</b> sold
+  </div>` + filtered.map((l) => {
+    const open = expandedId === l.id;
+    return `
+      <div>
+        <div class="row" data-id="${l.id}" data-action="toggle">
+          <span class="tag">${categoryLabel(l.category)}</span>
+          <div class="row-main">
+            <div class="row-title">${escapeHtml(l.property_code || "No code")} — ${escapeHtml(l.owner_name)}</div>
+            <div class="row-meta">📍 ${l.barangay ? escapeHtml(l.barangay) + ", " : ""}${escapeHtml(l.municipality)}${l.lot_area ? " · " + escapeHtml(l.lot_area) + " sqm" : ""}</div>
+          </div>
+          <div class="price">${l.selling_price ? "₱" + escapeHtml(l.selling_price) : "—"}<span class="label">Selling</span></div>
+          <span class="status-pill" style="background:${statusColor(l.status)}">${l.status}</span>
+          ${isAdmin ? `
+            <div class="row-actions" data-stop="1">
+              <button class="icon-btn" data-id="${l.id}" data-action="edit">✏️</button>
+              <button class="icon-btn" data-id="${l.id}" data-action="delete">🗑️</button>
+            </div>` : ""}
+          <span style="color:#6B6558;">${open ? "▲" : "▼"}</span>
+        </div>
+        ${open ? `
+          <div class="detail">
+            <div class="detail-section-title">Property & Documents</div>
+            <div class="detail-grid">
+              <div><b>Registration Date</b>${escapeHtml(l.registration_date) || "—"}</div>
+              <div><b>Contact No.</b>${escapeHtml(l.contact_no) || "—"}</div>
+              <div><b>Address</b>${escapeHtml(l.address) || "—"}</div>
+              <div><b>Lot No.</b>${escapeHtml(l.lot_no) || "—"}</div>
+              <div><b>Title No.</b>${escapeHtml(l.title_no) || "—"}</div>
+              <div><b>Tax Dec No.</b>${escapeHtml(l.tax_dec_no) || "—"}</div>
+              <div><b>Lot Area</b>${escapeHtml(l.lot_area) || "—"}</div>
+              <div><b>ATS Price</b>${l.ats_price ? "₱" + escapeHtml(l.ats_price) : "—"}</div>
+            </div>
+            <div class="detail-section-title">Agent Hierarchy</div>
+            <div class="detail-grid">
+              <div><b>Site Locator</b>${escapeHtml(l.site_locator) || "—"}</div>
+              <div><b>Recruited By</b>${escapeHtml(l.recruited_by) || "—"}</div>
+              <div><b>Unit Manager</b>${escapeHtml(l.unit_manager) || "—"}</div>
+              <div><b>Division Manager</b>${escapeHtml(l.division_manager) || "—"}</div>
+              <div><b>Sub Broker</b>${escapeHtml(l.sub_broker) || "—"}</div>
+            </div>
+            ${l.remarks ? `<div class="detail-section-title">Remarks</div><div>${escapeHtml(l.remarks)}</div>` : ""}
+            ${photoList(l.photo_urls).length ? `
+              <div class="detail-section-title">Photos</div>
+              <div class="photo-strip">${photoList(l.photo_urls).map((u) => `<a href="${escapeHtml(u)}" target="_blank"><img src="${escapeHtml(u)}" /></a>`).join("")}</div>
+            ` : ""}
+          </div>` : ""}
+      </div>`;
+  }).join("");
+}
+
+// ---- Search logging (debounced) ----
+function logSearchDebounced() {
+  clearTimeout(searchLogTimer);
+  searchLogTimer = setTimeout(logSearchNow, 800);
+}
+async function logSearchNow() {
+  if (!session) return;
+  const location = $("filterLocation") ? $("filterLocation").value : "All";
+  const category = $("filterCategory") ? $("filterCategory").value : "All";
+  const status = $("filterStatus") ? $("filterStatus").value : "All";
+  const q = $("searchInput") ? $("searchInput").value.trim() : "";
+  if (!q && location === "All" && category === "All" && status === "All") return; // skip logging empty/default state
+  const resultsCount = getFiltered().length;
+  try {
+    await sb.from("search_logs").insert({
+      user_id: session.user.id,
+      query_text: q,
+      filter_location: location,
+      filter_category: category,
+      filter_status: status,
+      results_count: resultsCount,
+    });
+  } catch (e) { console.error("search log failed", e); }
+}
+
+// ---- CRUD (admin only, but functions are harmless if RLS blocks them) ----
+const FIELD_IDS = [
+  "property_code","registration_date","owner_name","contact_no","address","municipality","barangay",
+  "category","status","lot_no","title_no","tax_dec_no","lot_area","ats_price","selling_price",
+  "site_locator","recruited_by","unit_manager","division_manager","sub_broker","remarks","photo_urls",
+];
+function emptyForm() {
+  return { property_code: "", registration_date: "", owner_name: "", contact_no: "", address: "",
+    municipality: "Cebu City", barangay: "", category: "raw_land", status: "Available",
+    lot_no: "", title_no: "", tax_dec_no: "", lot_area: "", ats_price: "", selling_price: "",
+    site_locator: "", recruited_by: "", unit_manager: "", division_manager: "", sub_broker: "",
+    remarks: "", photo_urls: "" };
+}
+function openAdd() { editingId = null; openFormModal(emptyForm(), "Add listing", "Add listing"); }
+function openEdit(item) { editingId = item.id; openFormModal(item, "Edit listing", "Save changes"); }
+
+function openFormModal(values, title, submitLabel) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `
+    <form class="modal">
+      <h2>${title} <button type="button" class="icon-btn" id="closeFormModal">✕</button></h2>
+      <div class="row2">
+        <div><label>Property Code No. *</label><input id="f_property_code" required /></div>
+        <div><label>Registration Date</label><input type="date" id="f_registration_date" /></div>
+      </div>
+      <div class="row2">
+        <div><label>Owner's Name *</label><input id="f_owner_name" required /></div>
+        <div><label>Contact No.</label><input id="f_contact_no" /></div>
+      </div>
+      <label>Address</label><input id="f_address" />
+      <div class="row3">
+        <div><label>Municipality / City</label><select class="field" id="f_municipality" style="width:100%"></select></div>
+        <div><label>Barangay</label><input id="f_barangay" /></div>
+        <div><label>Category</label><select class="field" id="f_category" style="width:100%"></select></div>
+      </div>
+      <div class="section-title">Documents</div>
+      <div class="row3">
+        <div><label>Lot No.</label><input id="f_lot_no" /></div>
+        <div><label>Title No.</label><input id="f_title_no" /></div>
+        <div><label>Tax Dec No.</label><input id="f_tax_dec_no" /></div>
+      </div>
+      <div class="section-title">Area & Pricing</div>
+      <div class="row3">
+        <div><label>Lot Area (sqm)</label><input id="f_lot_area" /></div>
+        <div><label>ATS Price (₱)</label><input id="f_ats_price" /></div>
+        <div><label>Selling Price (₱)</label><input id="f_selling_price" /></div>
+      </div>
+      <label>Status</label><select class="field" id="f_status" style="width:100%"></select>
+      <div class="section-title">Agent Hierarchy</div>
+      <div class="row2">
+        <div><label>Site Locator</label><input id="f_site_locator" /></div>
+        <div><label>Recruited By</label><input id="f_recruited_by" /></div>
+      </div>
+      <div class="row3">
+        <div><label>Unit Manager</label><input id="f_unit_manager" /></div>
+        <div><label>Division Manager</label><input id="f_division_manager" /></div>
+        <div><label>Sub Broker</label><input id="f_sub_broker" /></div>
+      </div>
+      <div class="section-title">Photos & Remarks</div>
+      <label>Photo URLs (one per line)</label><textarea id="f_photo_urls"></textarea>
+      <label>Remarks</label><textarea id="f_remarks"></textarea>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="cancelFormModal">Cancel</button>
+        <button type="submit" class="btn">${submitLabel}</button>
+      </div>
+    </form>`;
+  document.body.appendChild(backdrop);
+
+  const populateSelect = (el, options) => { el.innerHTML = options.map((o) => typeof o === "string" ? `<option value="${o}">${o}</option>` : `<option value="${o.id}">${o.label}</option>`).join(""); };
+  populateSelect(backdrop.querySelector("#f_municipality"), CEBU_LOCATIONS);
+  populateSelect(backdrop.querySelector("#f_category"), CATEGORIES);
+  populateSelect(backdrop.querySelector("#f_status"), STATUSES);
+  FIELD_IDS.forEach((id) => { backdrop.querySelector("#f_" + id).value = values[id] || ""; });
+
+  const close = () => backdrop.remove();
+  backdrop.querySelector("#closeFormModal").addEventListener("click", close);
+  backdrop.querySelector("#cancelFormModal").addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  backdrop.querySelector("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {};
+    FIELD_IDS.forEach((id) => { payload[id] = backdrop.querySelector("#f_" + id).value.trim(); });
+    if (!payload.property_code || !payload.owner_name) return;
+    if (editingId) await updateListing(editingId, payload);
+    else await createListing(payload);
+    close();
+  });
+}
+
+async function createListing(payload) {
+  const { error } = await sb.from("listings").insert(payload);
+  if (error) { showError("Could not save: " + error.message); return; }
+  await loadListings(true);
+}
+async function updateListing(id, payload) {
+  const { error } = await sb.from("listings").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) { showError("Could not save: " + error.message); return; }
+  await loadListings(true);
+}
+async function deleteListing(id) {
+  if (!confirm("Delete this listing? This cannot be undone.")) return;
+  const { error } = await sb.from("listings").delete().eq("id", id);
+  if (error) { showError("Could not delete: " + error.message); return; }
+  await loadListings(true);
+}
+
+function exportCSV() {
+  const rows = getFiltered().map((l) => ({
+    propertyCode: l.property_code, registrationDate: l.registration_date, ownerName: l.owner_name,
+    contactNo: l.contact_no, address: l.address, municipality: l.municipality, barangay: l.barangay,
+    category: categoryLabel(l.category), status: l.status,
+    lotNo: l.lot_no, titleNo: l.title_no, taxDecNo: l.tax_dec_no, lotArea: l.lot_area,
+    atsPrice: l.ats_price, sellingPrice: l.selling_price,
+    siteLocator: l.site_locator, recruitedBy: l.recruited_by, unitManager: l.unit_manager,
+    divisionManager: l.division_manager, subBroker: l.sub_broker,
+    remarks: l.remarks || "", photoUrls: l.photo_urls || "",
+  }));
+  const csv = Papa.unparse(rows);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `mrbestbuy-listings-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+function handleImportFile(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  Papa.parse(file, {
+    header: true, skipEmptyLines: true,
+    complete: async (results) => {
+      const rows = results.data.map((row) => {
+        const rawCat = (row.category || row.Category || "raw_land").toString().toLowerCase();
+        let category = "raw_land";
+        if (rawCat.includes("house")) category = "house_and_lot";
+        else if (rawCat.includes("commercial")) category = "commercial_lot";
+        else if (rawCat.includes("industrial")) category = "industrial_lot";
+        const rawStatus = row.status || row.Status || "Available";
+        const rawLoc = row.municipality || row.Municipality || row.location || "Cebu City";
+        return {
+          property_code: (row.propertyCode || row["Property Code"] || "").toString().trim(),
+          registration_date: (row.registrationDate || row["Registration Date"] || "").toString().trim() || null,
+          owner_name: (row.ownerName || row["Owner's Name"] || "").toString().trim(),
+          contact_no: (row.contactNo || row["Contact No"] || "").toString().trim(),
+          address: (row.address || row.Address || "").toString().trim(),
+          municipality: CEBU_LOCATIONS.includes(rawLoc) ? rawLoc : "Cebu City",
+          barangay: (row.barangay || row.Barangay || "").toString().trim(),
+          category,
+          status: STATUSES.includes(rawStatus) ? rawStatus : "Available",
+          lot_no: (row.lotNo || row["Lot No"] || "").toString().trim(),
+          title_no: (row.titleNo || row["Title No"] || "").toString().trim(),
+          tax_dec_no: (row.taxDecNo || row["Tax Dec No"] || "").toString().trim(),
+          lot_area: (row.lotArea || row["Lot Area"] || "").toString().trim(),
+          ats_price: (row.atsPrice || row["ATS Price"] || "").toString().trim(),
+          selling_price: (row.sellingPrice || row["Selling Price"] || "").toString().trim(),
+          site_locator: (row.siteLocator || row["Site Locator"] || "").toString().trim(),
+          recruited_by: (row.recruitedBy || row["Recruited By"] || "").toString().trim(),
+          unit_manager: (row.unitManager || row["Unit Manager"] || "").toString().trim(),
+          division_manager: (row.divisionManager || row["Division Manager"] || "").toString().trim(),
+          sub_broker: (row.subBroker || row["Sub Broker"] || "").toString().trim(),
+          remarks: (row.remarks || row.Remarks || "").toString().trim(),
+          photo_urls: (row.photoUrls || row["Photo URLs"] || "").toString().trim(),
+        };
+      }).filter((r) => r.property_code || r.owner_name);
+      if (rows.length === 0) { alert('No valid rows found. Make sure the CSV has "propertyCode" or "ownerName" columns.'); return; }
+      if (confirm(`Import ${rows.length} listing(s)?`)) {
+        const { error } = await sb.from("listings").insert(rows);
+        if (error) { showError("Import failed: " + error.message); return; }
+        await loadListings(true);
+      }
+    },
+    error: () => alert("Could not read that file. Please check it is a valid CSV."),
+  });
+  e.target.value = "";
+}
+
+// =====================================================================
+// ADMIN: PENDING APPROVALS
+// =====================================================================
+async function renderApprovalsView() {
+  const body = $("tabBody");
+  body.innerHTML = `<div class="panel"><div id="approvalsList">Loading…</div></div>`;
+  const { data, error } = await sb.from("profiles").select("*").eq("status", "pending").order("created_at", { ascending: true });
+  if (error) { $("approvalsList").innerHTML = `<div class="errline">Could not load: ${escapeHtml(error.message)}</div>`; return; }
+  pendingProfiles = data || [];
+  const list = $("approvalsList");
+  if (pendingProfiles.length === 0) {
+    list.innerHTML = `<div class="empty"><h3>No pending requests</h3><p>New agent signups will show up here for approval.</p></div>`;
+    return;
+  }
+  list.innerHTML = pendingProfiles.map((p) => `
+    <div class="card">
+      <div class="card-row">
+        <div>
+          <div style="font-family:Georgia,serif; font-size:15px; color:#163832;">${escapeHtml(p.full_name || "(no name given)")}</div>
+          <div style="font-size:12.5px; color:#6B6558;">${escapeHtml(p.email)} · requested ${new Date(p.created_at).toLocaleDateString()}</div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn secondary" data-approve-agent="${p.id}">Approve as Agent</button>
+          <button class="btn ghost" data-approve-admin="${p.id}">Approve as Admin</button>
+          <button class="btn danger" data-reject="${p.id}">Reject</button>
+        </div>
+      </div>
+    </div>`).join("");
+
+  list.querySelectorAll("[data-approve-agent]").forEach((btn) => btn.addEventListener("click", () => setProfileStatus(btn.dataset.approveAgent, "approved", "agent")));
+  list.querySelectorAll("[data-approve-admin]").forEach((btn) => btn.addEventListener("click", () => setProfileStatus(btn.dataset.approveAdmin, "approved", "admin")));
+  list.querySelectorAll("[data-reject]").forEach((btn) => btn.addEventListener("click", () => setProfileStatus(btn.dataset.reject, "rejected", "agent")));
+}
+async function setProfileStatus(id, status, role) {
+  const { error } = await sb.from("profiles").update({ status, role }).eq("id", id);
+  if (error) { alert("Could not update: " + error.message); return; }
+  renderApprovalsView();
+}
+
+// =====================================================================
+// ADMIN: SEARCH REPORTS
+// =====================================================================
+async function renderReportsView() {
+  const body = $("tabBody");
+  body.innerHTML = `<div class="panel"><div id="reportsBody">Loading…</div></div>`;
+
+  const [{ data: logs, error: logErr }, { data: allProfiles, error: profErr }] = await Promise.all([
+    sb.from("search_logs").select("*").order("searched_at", { ascending: false }).limit(500),
+    sb.from("profiles").select("id, email, full_name"),
+  ]);
+  if (logErr) { $("reportsBody").innerHTML = `<div class="errline">Could not load logs: ${escapeHtml(logErr.message)}</div>`; return; }
+
+  searchLogs = logs || [];
+  profilesById = {};
+  (allProfiles || []).forEach((p) => { profilesById[p.id] = p; });
+
+  if (searchLogs.length === 0) {
+    $("reportsBody").innerHTML = `<div class="empty"><h3>No search activity yet</h3><p>Once agents start searching and filtering, activity will show up here.</p></div>`;
+    return;
+  }
+
+  const countBy = (keyFn) => {
+    const m = {};
+    searchLogs.forEach((l) => { const k = keyFn(l); if (!k || k === "All") return; m[k] = (m[k] || 0) + 1; });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  };
+  const topLocations = countBy((l) => l.filter_location);
+  const topCategories = countBy((l) => l.filter_category ? categoryLabel(l.filter_category) : null);
+  const byUser = {};
+  searchLogs.forEach((l) => { byUser[l.user_id] = (byUser[l.user_id] || 0) + 1; });
+  const topUsers = Object.entries(byUser).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const nameFor = (id) => { const p = profilesById[id]; return p ? (p.full_name || p.email) : "(unknown)"; };
+
+  const statCardsHtml = (title, rows, empty) => `
+    <div class="stat-card">
+      <div class="lbl">${title}</div>
+      ${rows.length === 0 ? `<div style="font-size:12.5px;color:#6B6558;margin-top:8px;">${empty}</div>` :
+        rows.map(([k, v]) => `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;"><span>${escapeHtml(k)}</span><b style="color:#163832;">${v}</b></div>`).join("")}
+    </div>`;
+
+  $("reportsBody").innerHTML = `
+    <div class="stat-cards">
+      ${statCardsHtml("Top Searched Locations", topLocations, "No location filters used yet")}
+      ${statCardsHtml("Top Searched Categories", topCategories, "No category filters used yet")}
+      ${statCardsHtml("Most Active Agents", topUsers.map(([id, c]) => [nameFor(id), c]), "No activity yet")}
+    </div>
+    <div class="card">
+      <div style="font-family:Georgia,serif; color:#163832; font-size:15px; margin-bottom:10px;">Recent Search Activity (last 500)</div>
+      <div style="overflow-x:auto;">
+        <table class="logtable">
+          <thead><tr><th>When</th><th>Agent</th><th>Query</th><th>Location</th><th>Category</th><th>Status</th><th>Results</th></tr></thead>
+          <tbody>
+            ${searchLogs.slice(0, 200).map((l) => `
+              <tr>
+                <td>${new Date(l.searched_at).toLocaleString()}</td>
+                <td>${escapeHtml(nameFor(l.user_id))}</td>
+                <td>${escapeHtml(l.query_text) || "—"}</td>
+                <td>${escapeHtml(l.filter_location)}</td>
+                <td>${l.filter_category ? escapeHtml(categoryLabel(l.filter_category)) : "All"}</td>
+                <td>${escapeHtml(l.filter_status)}</td>
+                <td>${l.results_count}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// =====================================================================
+// BOOT / AUTH STATE
+// =====================================================================
+async function boot() {
+  const { data: { session: s } } = await sb.auth.getSession();
+  session = s;
+  if (!session) { renderAuth(); return; }
+  await loadProfileAndRender();
+}
+
+async function loadProfileAndRender() {
+  const { data, error } = await sb.from("profiles").select("*").eq("id", session.user.id).single();
+  if (error || !data) {
+    // profile row not created yet (trigger race) — brief retry
+    setTimeout(loadProfileAndRender, 800);
+    return;
+  }
+  profile = data;
+  if (profile.status !== "approved") renderPending();
+  else renderApp();
+}
+
+sb.auth.onAuthStateChange((event, s) => {
+  session = s;
+  if (!session) { profile = null; renderAuth(); return; }
+  loadProfileAndRender();
+});
+
+if (SUPABASE_URL.includes("PASTE_YOUR") || SUPABASE_ANON_KEY.includes("PASTE_YOUR")) {
+  $("root").innerHTML = `<div class="auth-wrap"><h1>Setup needed</h1><p style="font-size:13px;color:#6B6558;">Open this file and paste your Supabase URL and anon key at the top before using.</p></div>`;
+} else {
+  boot();
+}
+</script>
+</body>
+</html>
