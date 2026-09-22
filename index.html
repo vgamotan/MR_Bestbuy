@@ -149,6 +149,12 @@
   .combo-filter-wrap { flex: 1 1 190px; min-width: 170px; max-width: 240px; }
   /* Price range slider */
   .price-slider-row { padding: 4px 32px 18px; border-bottom: 1px solid #E4DDCF; }
+  .pagination-row { padding: 14px 32px 24px; }
+  .pagination-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 12.5px; color: #6B6558; }
+  .pagination-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .pagination-controls label { display: flex; align-items: center; gap: 6px; }
+  .pagination-controls select.field { padding: 5px 8px; }
+  .page-indicator { white-space: nowrap; }
   .price-slider-inner { max-width: 480px; }
   .price-slider-head { display: flex; align-items: baseline; gap: 12px; font-size: 12px; color: #6B6558; margin-bottom: 10px; }
   .price-slider-head > span:first-child { font-family: Georgia, serif; font-size: 13px; color: #163832; }
@@ -205,6 +211,8 @@
     .masthead h1 { font-size: 21px; }
     .toolbar { padding: 14px 16px; }
     .price-slider-row { padding: 4px 16px 16px; }
+    .pagination-row { padding: 12px 16px 20px; }
+    .pagination-inner { flex-direction: column; align-items: flex-start; }
     .list { padding: 0 16px; }
     .panel { padding: 18px 16px; }
 
@@ -255,6 +263,13 @@ let priceMin = null;      // current slider selection (Selling Price)
 let priceMax = null;
 let priceDataMin = 0;     // actual bounds from loaded listings
 let priceDataMax = 0;
+let priceBoundsFound = false;
+let pageSize = 25;        // 10 | 25 | 50 | 100
+let currentPage = 0;      // 0-indexed
+let totalCount = 0;       // total rows matching current filters (server-side)
+let overallCounts = { all: 0, available: 0, reserved: 0, sold: 0 }; // whole non-archived inventory, ignores current filters
+let searchFetchTimer = null;
+let priceSlideTimer = null;
 let formValues = {};    // in-progress Add/Edit form state for combobox-controlled fields
 
 function categoryLabel(id) { const c = CATEGORIES.find((x) => x.id === id); return c ? c.label : id; }
@@ -552,6 +567,7 @@ function renderListingsView(isAdmin) {
     <div class="price-slider-row" id="priceSliderRow"></div>
     <div id="errBanner" class="errline" style="padding:10px 32px 0; display:none;"></div>
     <div class="list" id="listContainer"></div>
+    <div class="pagination-row" id="paginationRow"></div>
   `;
 
   registerCombo("filterRegion", {
@@ -566,7 +582,7 @@ function renderListingsView(isAdmin) {
     multi: true,
     allowCreate: false,
     placeholder: "All regions",
-    onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
+    onChange: () => { currentPage = 0; loadListings(isAdmin); logSearchDebounced(); },
   });
   registerCombo("filterCity", {
     options: () => citiesForRegions(filterRegions),
@@ -575,7 +591,7 @@ function renderListingsView(isAdmin) {
     multi: true,
     allowCreate: false,
     placeholder: "All cities/municipalities",
-    onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
+    onChange: () => { currentPage = 0; loadListings(isAdmin); logSearchDebounced(); },
   });
   registerCombo("filterCategory", {
     options: () => CATEGORIES.map((c) => c.label),
@@ -584,7 +600,7 @@ function renderListingsView(isAdmin) {
     multi: true,
     allowCreate: false,
     placeholder: "All categories",
-    onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
+    onChange: () => { currentPage = 0; loadListings(isAdmin); logSearchDebounced(); },
   });
   registerCombo("filterStatus", {
     options: () => STATUSES,
@@ -593,33 +609,43 @@ function renderListingsView(isAdmin) {
     multi: true,
     allowCreate: false,
     placeholder: "All statuses",
-    onChange: () => { renderListRows(isAdmin); logSearchDebounced(); },
+    onChange: () => { currentPage = 0; loadListings(isAdmin); logSearchDebounced(); },
   });
   comboRefresh("filterRegion");
   comboRefresh("filterCity");
   comboRefresh("filterCategory");
   comboRefresh("filterStatus");
 
-  $("searchInput").addEventListener("input", () => { renderListRows(isAdmin); logSearchDebounced(); });
+  $("searchInput").addEventListener("input", () => {
+    clearTimeout(searchFetchTimer);
+    searchFetchTimer = setTimeout(() => { currentPage = 0; loadListings(isAdmin); }, 400);
+    logSearchDebounced();
+  });
   $("exportBtn").addEventListener("click", exportCSV);
   if (isAdmin) {
     $("addBtn").addEventListener("click", openAdd);
     $("importInput").addEventListener("change", handleImportFile);
     loadAgentNames();
   }
-  $("listContainer").addEventListener("click", (e) => {
+  $("listContainer").addEventListener("click", async (e) => {
     const actionEl = e.target.closest("[data-action]");
     if (!actionEl) return;
     const id = actionEl.dataset.id;
     const action = actionEl.dataset.action;
     if (action === "toggle") {
       if (e.target.closest("[data-stop]")) return;
-      expandedId = expandedId === id ? null : id;
+      const opening = expandedId !== id;
+      expandedId = opening ? id : null;
       renderListRows(isAdmin);
-    } else if (action === "edit") openEdit(listings.find((l) => l.id === id));
-    else if (action === "archive") archiveListing(id);
+      if (opening) { await ensureFullListing(id); renderListRows(isAdmin); }
+    } else if (action === "edit") {
+      const full = await ensureFullListing(id);
+      openEdit(full);
+    } else if (action === "archive") archiveListing(id);
   });
 
+  currentPage = 0;
+  computePriceBounds().then(() => renderPriceSlider(isAdmin));
   loadListings(isAdmin);
 }
 function filterCategoryLabels() { return filterCategories.map((id) => (CATEGORIES.find((c) => c.id === id) || {}).label).filter(Boolean); }
@@ -629,11 +655,25 @@ function parsePrice(v) {
   const n = parseFloat(String(v || "").replace(/,/g, ""));
   return isNaN(n) ? null : n;
 }
-function computePriceBounds() {
-  const vals = listings.map((l) => parsePrice(l.selling_price)).filter((n) => n !== null);
-  priceDataMin = vals.length ? Math.min(...vals) : 0;
-  priceDataMax = vals.length ? Math.max(...vals) : 0;
-  if (priceDataMin === priceDataMax) priceDataMax = priceDataMin + 1; // avoid a zero-width slider
+async function computePriceBounds() {
+  try {
+    const [minRes, maxRes] = await Promise.all([
+      sb.from("listings").select("selling_price_num").eq("archived", false).not("selling_price_num", "is", null).order("selling_price_num", { ascending: true }).limit(1),
+      sb.from("listings").select("selling_price_num").eq("archived", false).not("selling_price_num", "is", null).order("selling_price_num", { ascending: false }).limit(1),
+    ]);
+    if (minRes.data && minRes.data[0] && maxRes.data && maxRes.data[0]) {
+      priceBoundsFound = true;
+      priceDataMin = minRes.data[0].selling_price_num;
+      priceDataMax = maxRes.data[0].selling_price_num;
+      if (priceDataMax === priceDataMin) priceDataMax = priceDataMin + 1;
+    } else {
+      priceBoundsFound = false;
+      priceDataMin = 0; priceDataMax = 1;
+    }
+  } catch (e) {
+    priceBoundsFound = false;
+    priceDataMin = 0; priceDataMax = 1;
+  }
   priceMin = priceDataMin;
   priceMax = priceDataMax;
 }
@@ -644,8 +684,7 @@ function sliderPriceLabel(n) {
 function renderPriceSlider(isAdmin) {
   const row = $("priceSliderRow");
   if (!row) return;
-  const vals = listings.map((l) => parsePrice(l.selling_price)).filter((n) => n !== null);
-  if (vals.length === 0) { row.innerHTML = ""; return; }
+  if (!priceBoundsFound) { row.innerHTML = ""; return; }
   row.innerHTML = `
     <div class="price-slider-inner">
       <div class="price-slider-head">
@@ -669,8 +708,8 @@ function renderPriceSlider(isAdmin) {
     priceMin = a; priceMax = b;
     row.querySelector(".price-range-values").textContent = `₱${sliderPriceLabel(priceMin)} – ₱${sliderPriceLabel(priceMax)}`;
     updateRangeFill();
-    renderListRows(isAdmin);
-    logSearchDebounced();
+    clearTimeout(priceSlideTimer);
+    priceSlideTimer = setTimeout(() => { currentPage = 0; loadListings(isAdmin); logSearchDebounced(); }, 350);
   };
   minEl.addEventListener("input", onSlide);
   maxEl.addEventListener("input", onSlide);
@@ -678,7 +717,8 @@ function renderPriceSlider(isAdmin) {
     e.preventDefault();
     priceMin = priceDataMin; priceMax = priceDataMax;
     renderPriceSlider(isAdmin);
-    renderListRows(isAdmin);
+    currentPage = 0;
+    loadListings(isAdmin);
   });
 }
 function updateRangeFill() {
@@ -689,40 +729,108 @@ function updateRangeFill() {
   fill.style.left = leftPct + "%";
   fill.style.width = (rightPct - leftPct) + "%";
 }
-
-function getFiltered() {
-  const q = $("searchInput") ? $("searchInput").value.trim().toLowerCase() : "";
-  return listings.filter((l) => {
-    if (filterRegions.length && !filterRegions.includes(regionForMunicipality(l.municipality))) return false;
-    if (filterCities.length && !filterCities.includes(l.municipality)) return false;
-    if (filterCategories.length && !filterCategories.includes(l.category)) return false;
-    if (filterStatuses.length && !filterStatuses.includes(l.status)) return false;
-    if (priceMin !== null && priceMax !== null && !(priceMin === priceDataMin && priceMax === priceDataMax)) {
-      const p = parsePrice(l.selling_price);
-      if (p === null || p < priceMin || p > priceMax) return false;
-    }
-    if (q) {
-      const hay = `${l.property_code||""} ${l.owner_name||""} ${l.address||""} ${l.municipality||""} ${l.barangay||""} ${l.lot_no||""} ${l.title_no||""}`.toLowerCase();
-      if (!hay.includes(q)) return false;
-
-    }
-    return true;
-  });
+function isPriceFilterActive() {
+  return priceMin !== null && priceMax !== null && priceBoundsFound && !(priceMin === priceDataMin && priceMax === priceDataMax);
 }
+
+// Applies every active filter (region/city, category, status, price, search)
+// onto a Supabase query builder. Used by both the paginated list fetch and
+// the CSV export, so the two always agree on what "current filters" means.
+function applyActiveFilters(query) {
+  const cityFilter = filterCities.length ? filterCities : (filterRegions.length ? citiesForRegions(filterRegions) : null);
+  if (cityFilter) query = query.in("municipality", cityFilter);
+  if (filterCategories.length) query = query.in("category", filterCategories);
+  if (filterStatuses.length) query = query.in("status", filterStatuses);
+  if (isPriceFilterActive()) query = query.gte("selling_price_num", priceMin).lte("selling_price_num", priceMax);
+  const rawQ = $("searchInput") ? $("searchInput").value.trim() : "";
+  const term = rawQ.replace(/[,()%]/g, " ").trim();
+  if (term) {
+    const cols = ["property_code", "owner_name", "address", "municipality", "barangay", "lot_no", "title_no"];
+    query = query.or(cols.map((c) => `${c}.ilike.%${term}%`).join(","));
+  }
+  return query;
+}
+
+// Columns needed for the list view itself: row display + search/filter
+// matching columns. Everything else (documents, agent hierarchy, remarks,
+// photos) is fetched lazily only when a row is expanded or edited — cuts
+// payload substantially at scale, on top of pagination doing the heavy lifting.
+const LIST_COLUMNS = "id,property_code,owner_name,address,municipality,barangay,lot_no,title_no,lot_area,selling_price,category,status,archived,created_at";
 
 async function loadListings(isAdmin) {
   try {
-    const { data, error } = await sb.from("listings").select("*").eq("archived", false).order("created_at", { ascending: false });
+    let query = sb.from("listings").select(LIST_COLUMNS, { count: "exact" }).eq("archived", false);
+    query = applyActiveFilters(query);
+    query = query.order("created_at", { ascending: false }).range(currentPage * pageSize, currentPage * pageSize + pageSize - 1);
+    const { data, error, count } = await query;
     if (error) throw error;
     listings = data || [];
+    totalCount = count || 0;
     showError("");
   } catch (e) {
     showError("Could not load listings: " + e.message);
     console.error(e);
   }
-  computePriceBounds();
-  renderPriceSlider(isAdmin);
+  await loadOverallCounts();
   renderListRows(isAdmin);
+  renderPagination(isAdmin);
+}
+
+// Whole non-archived inventory counts, independent of current filters —
+// count-only queries (head: true), so they cost almost nothing regardless
+// of table size.
+async function loadOverallCounts() {
+  try {
+    const base = () => sb.from("listings").select("id", { count: "exact", head: true }).eq("archived", false);
+    const [allRes, availRes, resRes, soldRes] = await Promise.all([
+      base(), base().eq("status", "Available"), base().eq("status", "Reserved"), base().eq("status", "Sold"),
+    ]);
+    overallCounts = { all: allRes.count || 0, available: availRes.count || 0, reserved: resRes.count || 0, sold: soldRes.count || 0 };
+  } catch (e) { console.error("count query failed", e); }
+}
+
+function renderPagination(isAdmin) {
+  const row = $("paginationRow");
+  if (!row) return;
+  if (totalCount === 0) { row.innerHTML = ""; return; }
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const startItem = currentPage * pageSize + 1;
+  const endItem = Math.min(totalCount, (currentPage + 1) * pageSize);
+  row.innerHTML = `
+    <div class="pagination-inner">
+      <span>Showing ${startItem}–${endItem} of ${totalCount}</span>
+      <div class="pagination-controls">
+        <label>Per page
+          <select id="pageSizeSelect" class="field">
+            ${[10, 25, 50, 100].map((n) => `<option value="${n}" ${n === pageSize ? "selected" : ""}>${n}</option>`).join("")}
+          </select>
+        </label>
+        <button class="btn ghost" id="prevPageBtn" ${currentPage <= 0 ? "disabled" : ""}>‹ Prev</button>
+        <span class="page-indicator">Page ${currentPage + 1} of ${totalPages}</span>
+        <button class="btn ghost" id="nextPageBtn" ${currentPage >= totalPages - 1 ? "disabled" : ""}>Next ›</button>
+      </div>
+    </div>`;
+  $("pageSizeSelect").addEventListener("change", (e) => {
+    pageSize = parseInt(e.target.value, 10);
+    currentPage = 0;
+    loadListings(isAdmin);
+  });
+  $("prevPageBtn").addEventListener("click", () => { if (currentPage > 0) { currentPage--; loadListings(isAdmin); } });
+  $("nextPageBtn").addEventListener("click", () => { if (currentPage < totalPages - 1) { currentPage++; loadListings(isAdmin); } });
+}
+
+// Fetches the remaining columns for one listing the first time it's
+// needed (expanded, or opened for edit) and merges them into the
+// in-memory record. Cheap: one row, fetched at most once per listing
+// per page load.
+async function ensureFullListing(id) {
+  const item = listings.find((l) => l.id === id);
+  if (item && item._full) return item;
+  const { data, error } = await sb.from("listings").select("*").eq("id", id).single();
+  if (error) { showError("Could not load full listing details: " + error.message); return item; }
+  const merged = { ...item, ...data, _full: true };
+  listings = listings.map((l) => (l.id === id ? merged : l));
+  return merged;
 }
 
 function showError(msg) {
@@ -734,27 +842,21 @@ function showError(msg) {
 }
 
 function renderListRows(isAdmin) {
-  const counts = {
-    all: listings.length,
-    available: listings.filter((l) => l.status === "Available").length,
-    reserved: listings.filter((l) => l.status === "Reserved").length,
-    sold: listings.filter((l) => l.status === "Sold").length,
-  };
-  const filtered = getFiltered();
+  const counts = overallCounts;
   const container = $("listContainer");
   if (!container) return;
-  if (listings.length === 0 || filtered.length === 0) {
-    container.innerHTML = `<div class="empty"><h3>${listings.length === 0 ? "No listings yet" : "No matches"}</h3><p>${
-      listings.length === 0
-        ? (isAdmin ? "Add your first property or import a CSV to get started." : "No listings have been added yet.")
-        : "Try clearing a filter or search term."
-    }</p></div>`;
+  if (overallCounts.all === 0) {
+    container.innerHTML = `<div class="empty"><h3>No listings yet</h3><p>${isAdmin ? "Add your first property or import a CSV to get started." : "No listings have been added yet."}</p></div>`;
+    return;
+  }
+  if (totalCount === 0 || listings.length === 0) {
+    container.innerHTML = `<div class="empty"><h3>No matches</h3><p>Try clearing a filter or search term.</p></div>`;
     return;
   }
   container.innerHTML = `<div style="padding:14px 4px 0; font-size:12.5px; color:#6B6558;">
     <b style="color:#163832">${counts.all}</b> total &nbsp; <b style="color:#163832">${counts.available}</b> available &nbsp;
     <b style="color:#163832">${counts.reserved}</b> reserved &nbsp; <b style="color:#163832">${counts.sold}</b> sold
-  </div>` + filtered.map((l) => {
+  </div>` + listings.map((l) => {
     const open = expandedId === l.id;
     return `
       <div>
@@ -825,7 +927,7 @@ async function logSearchNow() {
   const priceActive = priceMin !== null && priceMax !== null && !(priceMin === priceDataMin && priceMax === priceDataMax);
   const q = $("searchInput") ? $("searchInput").value.trim() : "";
   if (!q && filterRegions.length === 0 && filterCities.length === 0 && filterCategories.length === 0 && filterStatuses.length === 0 && !priceActive) return; // skip logging empty/default state
-  const resultsCount = getFiltered().length;
+  const resultsCount = totalCount;
   try {
     await sb.from("search_logs").insert({
       user_id: session.user.id,
@@ -1002,24 +1104,48 @@ function openFormModal(values, title, submitLabel) {
 }
 
 async function createListing(payload) {
+  payload.selling_price_num = parsePrice(payload.selling_price);
+  payload.ats_price_num = parsePrice(payload.ats_price);
   const { error } = await sb.from("listings").insert(payload);
   if (error) { showError("Could not save: " + error.message); return; }
+  currentPage = 0;
+  await computePriceBounds();
+  renderPriceSlider(true);
   await loadListings(true);
 }
 async function updateListing(id, payload) {
+  payload.selling_price_num = parsePrice(payload.selling_price);
+  payload.ats_price_num = parsePrice(payload.ats_price);
   const { error } = await sb.from("listings").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", id);
   if (error) { showError("Could not save: " + error.message); return; }
+  await computePriceBounds();
+  renderPriceSlider(true);
   await loadListings(true);
 }
 async function archiveListing(id) {
   if (!confirm("Archive this listing? It will be hidden from the main list, and can be restored or permanently deleted from the Archive tab.")) return;
   const { error } = await sb.from("listings").update({ archived: true, updated_at: new Date().toISOString() }).eq("id", id);
   if (error) { showError("Could not archive: " + error.message); return; }
+  await computePriceBounds();
+  renderPriceSlider(true);
   await loadListings(true);
 }
 
-function exportCSV() {
-  const rows = getFiltered().map((l) => ({
+async function exportCSV() {
+  showError("");
+  let data;
+  try {
+    let query = sb.from("listings").select("*").eq("archived", false);
+    query = applyActiveFilters(query);
+    query = query.order("created_at", { ascending: false }).limit(20000);
+    const res = await query;
+    if (res.error) throw res.error;
+    data = res.data || [];
+  } catch (e) {
+    showError("Export failed: " + e.message);
+    return;
+  }
+  const rows = data.map((l) => ({
     propertyCode: l.property_code, registrationDate: l.registration_date, ownerName: l.owner_name,
     contactNo: l.contact_no, address: l.address, municipality: l.municipality, barangay: l.barangay,
     category: categoryLabel(l.category), status: l.status,
@@ -1067,6 +1193,8 @@ function handleImportFile(e) {
           lot_area: (row.lotArea || row["Lot Area"] || "").toString().trim(),
           ats_price: (row.atsPrice || row["ATS Price"] || "").toString().trim(),
           selling_price: (row.sellingPrice || row["Selling Price"] || "").toString().trim(),
+          ats_price_num: parsePrice(row.atsPrice || row["ATS Price"] || ""),
+          selling_price_num: parsePrice(row.sellingPrice || row["Selling Price"] || ""),
           site_locator: (row.siteLocator || row["Site Locator"] || "").toString().trim(),
           recruited_by: (row.recruitedBy || row["Recruited By"] || "").toString().trim(),
           unit_manager: (row.unitManager || row["Unit Manager"] || "").toString().trim(),
@@ -1092,6 +1220,9 @@ function handleImportFile(e) {
           });
         });
         for (const name of newNames) await createAgentName(name);
+        currentPage = 0;
+        await computePriceBounds();
+        renderPriceSlider(true);
         await loadListings(true);
       }
     },
