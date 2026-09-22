@@ -25,6 +25,19 @@
     "Ronda","Samboan","San Fernando","San Francisco","San Remigio","Santa Fe","Santander",
     "Sibonga","Sogod","Tabogon","Tabuelan","Talisay City","Toledo City","Tuburan","Tudela",
   ];
+  const BOHOL_LOCATIONS = [
+    "Alburquerque","Alicia","Anda","Antequera","Baclayon","Balilihan","Batuan","Bien Unido",
+    "Bilar","Buenavista","Calape","Candijay","Carmen","Catigbian","Clarin","Corella","Cortes",
+    "Dagohoy","Danao","Dauis","Dimiao","Duero","Garcia Hernandez","Getafe","Guindulman",
+    "Inabanga","Jagna","Lila","Loay","Loboc","Loon","Mabini","Maribojoc","Panglao","Pilar",
+    "President Carlos P. Garcia","Sagbayan","San Isidro","San Miguel","Sevilla",
+    "Sierra Bullones","Sikatuna","Tagbilaran City","Talibon","Trinidad","Tubigon","Ubay","Valencia",
+  ];
+  const NCR_LOCATIONS = [
+    "Caloocan City","Las Piñas City","Makati City","Malabon City","Mandaluyong City",
+    "Manila City","Marikina City","Muntinlupa City","Navotas City","Parañaque City",
+    "Pasay City","Pasig City","Pateros","Quezon City","San Juan City","Taguig City","Valenzuela City",
+  ];
   // Real, current official Philippine administrative regions (18, incl. the
   // Negros Island Region re-established in June 2024, which is why Central
   // Visayas here is Cebu + Bohol only — Negros Oriental & Siquijor moved to NIR).
@@ -48,19 +61,69 @@
     "Region XIII – Caraga",
     "BARMM – Bangsamoro Autonomous Region in Muslim Mindanao",
   ];
-  // City/Municipality options per region. Only Region VII (Central Visayas) is
-  // populated for now, matching your current Cebu-only business coverage — add
-  // more region entries here later if operations expand to other provinces.
-  const REGION_CITY_MAP = {};
-  PH_REGIONS.forEach((r) => { REGION_CITY_MAP[r] = []; });
-  REGION_CITY_MAP["Region VII – Central Visayas"] = CEBU_LOCATIONS;
+  // Real hierarchy: Region -> Province -> City/Municipality.
+  // NCR is the one genuine exception in Philippine administrative structure —
+  // it has NO provinces; its 17 LGUs sit directly under the region. Every
+  // other region here uses { provinces: {...} }; only Region VII (Cebu +
+  // Bohol) is populated so far, matching your current business coverage.
+  // Add more provinces/cities as coverage expands — nothing else needs to change.
+  const REGION_DATA = {};
+  PH_REGIONS.forEach((r) => { REGION_DATA[r] = { provinces: {} }; });
+  REGION_DATA["NCR – National Capital Region"] = { cities: NCR_LOCATIONS }; // no provinces
+  REGION_DATA["Region VII – Central Visayas"] = { provinces: { "Cebu": CEBU_LOCATIONS, "Bohol": BOHOL_LOCATIONS } };
+
+  function regionHasProvinces(region) { return !!(REGION_DATA[region] && REGION_DATA[region].provinces); }
+  function provincesForRegion(region) {
+    const r = REGION_DATA[region];
+    return r && r.provinces ? Object.keys(r.provinces) : [];
+  }
+  // Cities for one specific region (+ optional province narrowing).
+  function citiesForRegionProvince(region, province) {
+    const r = REGION_DATA[region];
+    if (!r) return [];
+    if (r.cities) return r.cities; // NCR-style: no provinces
+    if (province) return r.provinces[province] || [];
+    return Object.values(r.provinces).flat();
+  }
   function regionForMunicipality(m) {
-    for (const r of PH_REGIONS) if (REGION_CITY_MAP[r].includes(m)) return r;
+    for (const region of PH_REGIONS) {
+      const r = REGION_DATA[region];
+      if (r.cities && r.cities.includes(m)) return region;
+      if (r.provinces) { for (const list of Object.values(r.provinces)) if (list.includes(m)) return region; }
+    }
     return "Other";
   }
-  function citiesForRegions(regionsArr) {
-    if (!regionsArr || regionsArr.length === 0) return Object.values(REGION_CITY_MAP).flat();
-    return [...new Set(regionsArr.flatMap((r) => REGION_CITY_MAP[r] || []))];
+  function provinceForMunicipality(m) {
+    for (const region of PH_REGIONS) {
+      const r = REGION_DATA[region];
+      if (!r.provinces) continue;
+      for (const [prov, list] of Object.entries(r.provinces)) if (list.includes(m)) return prov;
+    }
+    return null;
+  }
+  // Cities available given the CURRENT filter selections (regions + provinces).
+  function citiesForRegions(regionsArr, provincesArr) {
+    const regions = (regionsArr && regionsArr.length) ? regionsArr : PH_REGIONS;
+    let pool = [];
+    regions.forEach((region) => {
+      const r = REGION_DATA[region];
+      if (!r) return;
+      if (r.cities) { pool.push(...r.cities); return; }
+      const provNames = Object.keys(r.provinces);
+      const relevant = (provincesArr && provincesArr.length) ? provincesArr.filter((p) => provNames.includes(p)) : provNames;
+      relevant.forEach((p) => pool.push(...r.provinces[p]));
+    });
+    return [...new Set(pool)];
+  }
+  // Province options available given the current region selection.
+  function provincesForRegions(regionsArr) {
+    const regions = (regionsArr && regionsArr.length) ? regionsArr : PH_REGIONS;
+    let pool = [];
+    regions.forEach((region) => {
+      const r = REGION_DATA[region];
+      if (r && r.provinces) pool.push(...Object.keys(r.provinces));
+    });
+    return [...new Set(pool)];
   }
   const CATEGORIES = [
     { id: "raw_land", label: "Raw Land" },
@@ -252,10 +315,12 @@ let editingId = null;
 let adminTab = "listings"; // listings | archive | approvals | reports
 let searchLogTimer = null;
 let pendingProfiles = [];
-let searchLogs = [];
-let profilesById = {};
+let reportsPage = 0;
+let reportsPageSize = 25;
+let reportsTotalCount = 0;
 let agentNames = []; // shared lookup pool for Site Locator / Recruited By / Unit Manager / Division Manager / Sub Broker
 let filterRegions = [];   // multi-select
+let filterProvinces = []; // multi-select (only meaningful for regions that have provinces)
 let filterCities = [];    // multi-select
 let filterCategories = []; // multi-select, stores category ids
 let filterStatuses = [];   // multi-select
@@ -553,6 +618,7 @@ function renderListingsView(isAdmin) {
   body.innerHTML = `
     <div class="toolbar">
       <div class="combo-filter-wrap" data-combo-wrap="filterRegion"></div>
+      <div class="combo-filter-wrap" data-combo-wrap="filterProvince"></div>
       <div class="combo-filter-wrap" data-combo-wrap="filterCity"></div>
       <div class="combo-filter-wrap" data-combo-wrap="filterCategory"></div>
       <div class="combo-filter-wrap" data-combo-wrap="filterStatus"></div>
@@ -575,8 +641,11 @@ function renderListingsView(isAdmin) {
     getSelected: () => filterRegions,
     setSelected: (arr) => {
       filterRegions = arr;
-      const available = citiesForRegions(filterRegions);
-      filterCities = filterCities.filter((c) => available.includes(c));
+      const availableProvinces = provincesForRegions(filterRegions);
+      filterProvinces = filterProvinces.filter((p) => availableProvinces.includes(p));
+      const availableCities = citiesForRegions(filterRegions, filterProvinces);
+      filterCities = filterCities.filter((c) => availableCities.includes(c));
+      comboRefresh("filterProvince");
       comboRefresh("filterCity");
     },
     multi: true,
@@ -584,8 +653,22 @@ function renderListingsView(isAdmin) {
     placeholder: "All regions",
     onChange: () => { currentPage = 0; loadListings(isAdmin); logSearchDebounced(); },
   });
+  registerCombo("filterProvince", {
+    options: () => provincesForRegions(filterRegions),
+    getSelected: () => filterProvinces,
+    setSelected: (arr) => {
+      filterProvinces = arr;
+      const availableCities = citiesForRegions(filterRegions, filterProvinces);
+      filterCities = filterCities.filter((c) => availableCities.includes(c));
+      comboRefresh("filterCity");
+    },
+    multi: true,
+    allowCreate: false,
+    placeholder: "All provinces",
+    onChange: () => { currentPage = 0; loadListings(isAdmin); logSearchDebounced(); },
+  });
   registerCombo("filterCity", {
-    options: () => citiesForRegions(filterRegions),
+    options: () => citiesForRegions(filterRegions, filterProvinces),
     getSelected: () => filterCities,
     setSelected: (arr) => { filterCities = arr; },
     multi: true,
@@ -612,6 +695,7 @@ function renderListingsView(isAdmin) {
     onChange: () => { currentPage = 0; loadListings(isAdmin); logSearchDebounced(); },
   });
   comboRefresh("filterRegion");
+  comboRefresh("filterProvince");
   comboRefresh("filterCity");
   comboRefresh("filterCategory");
   comboRefresh("filterStatus");
@@ -737,7 +821,7 @@ function isPriceFilterActive() {
 // onto a Supabase query builder. Used by both the paginated list fetch and
 // the CSV export, so the two always agree on what "current filters" means.
 function applyActiveFilters(query) {
-  const cityFilter = filterCities.length ? filterCities : (filterRegions.length ? citiesForRegions(filterRegions) : null);
+  const cityFilter = filterCities.length ? filterCities : ((filterRegions.length || filterProvinces.length) ? citiesForRegions(filterRegions, filterProvinces) : null);
   if (cityFilter) query = query.in("municipality", cityFilter);
   if (filterCategories.length) query = query.in("category", filterCategories);
   if (filterStatuses.length) query = query.in("status", filterStatuses);
@@ -921,12 +1005,12 @@ function logSearchDebounced() {
 }
 async function logSearchNow() {
   if (!session) return;
-  const locationLabel = [...filterRegions, ...filterCities].join(", ") || "All";
+  const locationLabel = [...filterRegions, ...filterProvinces, ...filterCities].join(", ") || "All";
   const categoryLabelStr = filterCategoryLabels().join(", ") || "All";
   const statusLabelStr = filterStatuses.join(", ") || "All";
   const priceActive = priceMin !== null && priceMax !== null && !(priceMin === priceDataMin && priceMax === priceDataMax);
   const q = $("searchInput") ? $("searchInput").value.trim() : "";
-  if (!q && filterRegions.length === 0 && filterCities.length === 0 && filterCategories.length === 0 && filterStatuses.length === 0 && !priceActive) return; // skip logging empty/default state
+  if (!q && filterRegions.length === 0 && filterProvinces.length === 0 && filterCities.length === 0 && filterCategories.length === 0 && filterStatuses.length === 0 && !priceActive) return; // skip logging empty/default state
   const resultsCount = totalCount;
   try {
     await sb.from("search_logs").insert({
@@ -965,8 +1049,10 @@ function openEdit(item) { editingId = item.id; openFormModal(item, "Edit listing
 
 function openFormModal(values, title, submitLabel) {
   const initialRegion = values.municipality ? regionForMunicipality(values.municipality) : "Region VII – Central Visayas";
+  const resolvedRegion = initialRegion !== "Other" ? initialRegion : "Region VII – Central Visayas";
   formValues = {
-    region: initialRegion !== "Other" ? initialRegion : "Region VII – Central Visayas",
+    region: resolvedRegion,
+    province: values.municipality ? provinceForMunicipality(values.municipality) : "Cebu",
     municipality: values.municipality || "Cebu City",
     site_locator: values.site_locator || "",
     recruited_by: values.recruited_by || "",
@@ -993,16 +1079,20 @@ function openFormModal(values, title, submitLabel) {
           <label>Region</label>
           <div data-combo-wrap="modal_region"></div>
         </div>
+        <div id="modalProvinceWrap">
+          <label>Province</label>
+          <div data-combo-wrap="modal_province"></div>
+        </div>
         <div>
           <label>Municipality / City</label>
           <div data-combo-wrap="modal_municipality"></div>
         </div>
-        <div><label>Barangay</label><input id="f_barangay" /></div>
       </div>
       <div class="row2">
+        <div><label>Barangay</label><input id="f_barangay" /></div>
         <div><label>Category</label><select class="field" id="f_category" style="width:100%"></select></div>
-        <div><label>Status</label><select class="field" id="f_status" style="width:100%"></select></div>
       </div>
+      <label>Status</label><select class="field" id="f_status" style="width:100%"></select>
       <div class="section-title">Documents</div>
       <div class="row3">
         <div><label>Lot No.</label><input id="f_lot_no" /></div>
@@ -1044,28 +1134,51 @@ function openFormModal(values, title, submitLabel) {
     backdrop.querySelector("#f_" + id).value = values[id] || "";
   });
 
+  function updateProvinceVisibility() {
+    const wrap = backdrop.querySelector("#modalProvinceWrap");
+    if (wrap) wrap.style.display = regionHasProvinces(formValues.region) ? "" : "none";
+  }
   registerCombo("modal_region", {
     options: () => PH_REGIONS,
     getSelected: () => [formValues.region],
     setSelected: (arr) => {
       formValues.region = arr[0] || "Region VII – Central Visayas";
-      const available = REGION_CITY_MAP[formValues.region] || [];
+      const provinces = provincesForRegion(formValues.region);
+      formValues.province = provinces.includes(formValues.province) ? formValues.province : (provinces[0] || null);
+      const available = citiesForRegionProvince(formValues.region, formValues.province);
       if (!available.includes(formValues.municipality)) formValues.municipality = available[0] || "";
+      updateProvinceVisibility();
+      comboRefresh("modal_province");
       comboRefresh("modal_municipality");
     },
     multi: false,
     allowCreate: false,
     placeholder: "Search region...",
   });
+  registerCombo("modal_province", {
+    options: () => provincesForRegion(formValues.region),
+    getSelected: () => (formValues.province ? [formValues.province] : []),
+    setSelected: (arr) => {
+      formValues.province = arr[0] || null;
+      const available = citiesForRegionProvince(formValues.region, formValues.province);
+      if (!available.includes(formValues.municipality)) formValues.municipality = available[0] || "";
+      comboRefresh("modal_municipality");
+    },
+    multi: false,
+    allowCreate: false,
+    placeholder: "Search province...",
+  });
   registerCombo("modal_municipality", {
-    options: () => REGION_CITY_MAP[formValues.region] || [],
+    options: () => citiesForRegionProvince(formValues.region, formValues.province),
     getSelected: () => (formValues.municipality ? [formValues.municipality] : []),
     setSelected: (arr) => { formValues.municipality = arr[0] || ""; },
     multi: false,
     allowCreate: false,
-    placeholder: (REGION_CITY_MAP[formValues.region] || []).length ? "Search municipality/city..." : "No cities added for this region yet",
+    placeholder: citiesForRegionProvince(formValues.region, formValues.province).length ? "Search municipality/city..." : "No cities added for this region/province yet",
   });
+  updateProvinceVisibility();
   comboRefresh("modal_region");
+  comboRefresh("modal_province");
   comboRefresh("modal_municipality");
 
   AGENT_ROLE_FIELDS.forEach((f) => {
@@ -1183,7 +1296,7 @@ function handleImportFile(e) {
           owner_name: (row.ownerName || row["Owner's Name"] || "").toString().trim(),
           contact_no: (row.contactNo || row["Contact No"] || "").toString().trim(),
           address: (row.address || row.Address || "").toString().trim(),
-          municipality: CEBU_LOCATIONS.includes(rawLoc) ? rawLoc : "Cebu City",
+          municipality: regionForMunicipality(rawLoc) !== "Other" ? rawLoc : "Cebu City",
           barangay: (row.barangay || row.Barangay || "").toString().trim(),
           category,
           status: STATUSES.includes(rawStatus) ? rawStatus : "Available",
@@ -1385,35 +1498,29 @@ async function renderReportsView() {
   const body = $("tabBody");
   body.innerHTML = `<div class="panel"><div id="reportsBody">Loading…</div></div>`;
 
-  const [{ data: logs, error: logErr }, { data: allProfiles, error: profErr }] = await Promise.all([
-    sb.from("search_logs").select("*").order("searched_at", { ascending: false }).limit(500),
-    sb.from("profiles").select("id, email, full_name"),
+  // Aggregates computed IN the database (see search-reports-rpc.sql) —
+  // only ever a handful of rows come back, regardless of log volume.
+  const [locRes, catRes, userRes] = await Promise.all([
+    sb.rpc("top_search_locations", { limit_count: 5 }),
+    sb.rpc("top_search_categories", { limit_count: 5 }),
+    sb.rpc("top_search_users", { limit_count: 5 }),
   ]);
-  if (logErr) { $("reportsBody").innerHTML = `<div class="errline">Could not load logs: ${escapeHtml(logErr.message)}</div>`; return; }
+  if (locRes.error) { $("reportsBody").innerHTML = `<div class="errline">Could not load report: ${escapeHtml(locRes.error.message)}</div>`; return; }
 
-  searchLogs = logs || [];
-  profilesById = {};
-  (allProfiles || []).forEach((p) => { profilesById[p.id] = p; });
+  const topLocations = (locRes.data || []).map((r) => [r.label, r.cnt]);
+  const topCategories = (catRes.data || []).map((r) => [categoryLabel(r.label) || r.label, r.cnt]);
+  const topUserRows = userRes.data || [];
 
-  if (searchLogs.length === 0) {
-    $("reportsBody").innerHTML = `<div class="empty"><h3>No search activity yet</h3><p>Once agents start searching and filtering, activity will show up here.</p></div>`;
-    return;
+  // Names for the small set of user_ids in the "Most Active Agents" card —
+  // fetched by exact id list, never the whole profiles table.
+  let profilesById2 = {};
+  if (topUserRows.length) {
+    const ids = topUserRows.map((r) => r.user_id);
+    const { data: profs } = await sb.from("profiles").select("id, email, full_name").in("id", ids);
+    (profs || []).forEach((p) => { profilesById2[p.id] = p; });
   }
-
-  const countByCommaField = (field) => {
-    const m = {};
-    searchLogs.forEach((l) => {
-      (l[field] || "").split(",").map((s) => s.trim()).filter((s) => s && s !== "All").forEach((tok) => { m[tok] = (m[tok] || 0) + 1; });
-    });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  };
-  const topLocations = countByCommaField("filter_location");
-  const topCategories = countByCommaField("filter_category");
-  const byUser = {};
-  searchLogs.forEach((l) => { byUser[l.user_id] = (byUser[l.user_id] || 0) + 1; });
-  const topUsers = Object.entries(byUser).sort((a, b) => b[1] - a[1]).slice(0, 5);
-
-  const nameFor = (id) => { const p = profilesById[id]; return p ? (p.full_name || p.email) : "(unknown)"; };
+  const nameFor2 = (id) => { const p = profilesById2[id]; return p ? (p.full_name || p.email) : "(unknown)"; };
+  const topUsers = topUserRows.map((r) => [nameFor2(r.user_id), r.cnt]);
 
   const statCardsHtml = (title, rows, empty) => `
     <div class="stat-card">
@@ -1426,30 +1533,92 @@ async function renderReportsView() {
     <div class="stat-cards">
       ${statCardsHtml("Top Searched Locations", topLocations, "No location filters used yet")}
       ${statCardsHtml("Top Searched Categories", topCategories, "No category filters used yet")}
-      ${statCardsHtml("Most Active Agents", topUsers.map(([id, c]) => [nameFor(id), c]), "No activity yet")}
+      ${statCardsHtml("Most Active Agents", topUsers, "No activity yet")}
     </div>
     <div class="card">
-      <div style="font-family:Georgia,serif; color:#163832; font-size:15px; margin-bottom:10px;">Recent Search Activity (last 500)</div>
-      <div style="overflow-x:auto;">
-        <table class="logtable">
-          <thead><tr><th>When</th><th>Agent</th><th>Query</th><th>Location</th><th>Category</th><th>Status</th><th>Results</th></tr></thead>
-          <tbody>
-            ${searchLogs.slice(0, 200).map((l) => `
-              <tr>
-                <td>${new Date(l.searched_at).toLocaleString()}</td>
-                <td>${escapeHtml(nameFor(l.user_id))}</td>
-                <td>${escapeHtml(l.query_text) || "—"}</td>
-                <td>${escapeHtml(l.filter_location)}</td>
-                <td>${l.filter_category ? escapeHtml(categoryLabel(l.filter_category)) : "All"}</td>
-                <td>${escapeHtml(l.filter_status)}</td>
-                <td>${l.results_count}</td>
-              </tr>`).join("")}
-          </tbody>
-        </table>
-      </div>
+      <div style="font-family:Georgia,serif; color:#163832; font-size:15px; margin-bottom:10px;">Recent Search Activity</div>
+      <div style="overflow-x:auto;" id="reportsTableWrap">Loading…</div>
+      <div id="reportsPaginationRow"></div>
     </div>
   `;
+
+  reportsPage = 0;
+  await loadReportsPage();
 }
+
+// Only the current page's raw log rows are ever fetched — the summary
+// cards above come entirely from the RPC aggregates, not from this data.
+async function loadReportsPage() {
+  const wrap = $("reportsTableWrap");
+  if (!wrap) return;
+  const { data, error, count } = await sb.from("search_logs").select("*", { count: "exact" })
+    .order("searched_at", { ascending: false })
+    .range(reportsPage * reportsPageSize, reportsPage * reportsPageSize + reportsPageSize - 1);
+  if (error) { wrap.innerHTML = `<div class="errline">Could not load activity: ${escapeHtml(error.message)}</div>`; return; }
+  reportsTotalCount = count || 0;
+  const rows = data || [];
+
+  if (reportsTotalCount === 0) {
+    wrap.innerHTML = `<div class="empty"><h3>No search activity yet</h3><p>Once agents start searching and filtering, activity will show up here.</p></div>`;
+    $("reportsPaginationRow").innerHTML = "";
+    return;
+  }
+
+  const ids = [...new Set(rows.map((l) => l.user_id).filter(Boolean))];
+  let namesById = {};
+  if (ids.length) {
+    const { data: profs } = await sb.from("profiles").select("id, email, full_name").in("id", ids);
+    (profs || []).forEach((p) => { namesById[p.id] = p.full_name || p.email; });
+  }
+
+  wrap.innerHTML = `
+    <table class="logtable">
+      <thead><tr><th>When</th><th>Agent</th><th>Query</th><th>Location</th><th>Category</th><th>Status</th><th>Results</th></tr></thead>
+      <tbody>
+        ${rows.map((l) => `
+          <tr>
+            <td>${new Date(l.searched_at).toLocaleString()}</td>
+            <td>${escapeHtml(namesById[l.user_id] || "(unknown)")}</td>
+            <td>${escapeHtml(l.query_text) || "—"}</td>
+            <td>${escapeHtml(l.filter_location)}</td>
+            <td>${l.filter_category ? escapeHtml(l.filter_category) : "All"}</td>
+            <td>${escapeHtml(l.filter_status)}</td>
+            <td>${l.results_count}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
+  renderReportsPagination();
+}
+
+function renderReportsPagination() {
+  const row = $("reportsPaginationRow");
+  if (!row) return;
+  const totalPages = Math.max(1, Math.ceil(reportsTotalCount / reportsPageSize));
+  const startItem = reportsPage * reportsPageSize + 1;
+  const endItem = Math.min(reportsTotalCount, (reportsPage + 1) * reportsPageSize);
+  row.innerHTML = `
+    <div class="pagination-inner" style="margin-top:12px;">
+      <span>Showing ${startItem}–${endItem} of ${reportsTotalCount}</span>
+      <div class="pagination-controls">
+        <label>Per page
+          <select id="reportsPageSizeSelect" class="field">
+            ${[10, 25, 50, 100].map((n) => `<option value="${n}" ${n === reportsPageSize ? "selected" : ""}>${n}</option>`).join("")}
+          </select>
+        </label>
+        <button class="btn ghost" id="reportsPrevBtn" ${reportsPage <= 0 ? "disabled" : ""}>‹ Prev</button>
+        <span class="page-indicator">Page ${reportsPage + 1} of ${totalPages}</span>
+        <button class="btn ghost" id="reportsNextBtn" ${reportsPage >= totalPages - 1 ? "disabled" : ""}>Next ›</button>
+      </div>
+    </div>`;
+  $("reportsPageSizeSelect").addEventListener("change", (e) => {
+    reportsPageSize = parseInt(e.target.value, 10);
+    reportsPage = 0;
+    loadReportsPage();
+  });
+  $("reportsPrevBtn").addEventListener("click", () => { if (reportsPage > 0) { reportsPage--; loadReportsPage(); } });
+  $("reportsNextBtn").addEventListener("click", () => { if (reportsPage < totalPages - 1) { reportsPage++; loadReportsPage(); } });
+}
+
 
 // =====================================================================
 // BOOT / AUTH STATE
