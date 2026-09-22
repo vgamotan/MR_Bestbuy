@@ -346,7 +346,11 @@ let pendingProfiles = [];
 let reportsPage = 0;
 let reportsPageSize = 25;
 let reportsTotalCount = 0;
-let agentNames = []; // shared lookup pool for Site Locator / Recruited By / Unit Manager / Division Manager / Sub Broker
+let agentNames = []; // flat name list — used for quick duplicate checks (CSV import, add-name form)
+let agentDirectory = []; // full records: id, name, type, contact_no, email — used for role-filtered suggestions and the management tab
+let agentDirPage = 0;
+let agentDirPageSize = 25;
+let agentDirTotalCount = 0;
 let filterRegions = [];   // multi-select
 let filterProvinces = []; // multi-select (only meaningful for regions that have provinces)
 let filterCities = [];    // multi-select
@@ -506,15 +510,19 @@ document.addEventListener("click", (e) => {
 });
 async function loadAgentNames() {
   try {
-    const { data, error } = await sb.from("agent_directory").select("name").order("name");
-    if (!error && data) agentNames = data.map((r) => r.name);
+    const { data, error } = await sb.from("agent_directory").select("id, name, type, contact_no, email").order("name");
+    if (!error && data) {
+      agentDirectory = data;
+      agentNames = data.map((r) => r.name);
+    }
   } catch (e) { console.error("could not load agent directory", e); }
 }
-async function createAgentName(name) {
+async function createAgentEntry({ name, type, contact_no = "", email = "" }) {
   agentNames = [...new Set([...agentNames, name])].sort();
+  agentDirectory = [...agentDirectory, { name, type, contact_no, email }];
   try {
-    await sb.from("agent_directory").insert({ name });
-  } catch (e) { console.error("could not save new agent name", e); }
+    await sb.from("agent_directory").insert({ name, type, contact_no, email });
+  } catch (e) { console.error("could not save new agent entry", e); }
 }
 
 function formatMoney(v) {
@@ -1221,12 +1229,12 @@ function openFormModal(values, title, submitLabel) {
 
   AGENT_ROLE_FIELDS.forEach((f) => {
     registerCombo("modal_" + f.id, {
-      options: () => agentNames,
+      options: () => agentDirectory.filter((a) => a.type === f.id).map((a) => a.name),
       getSelected: () => (formValues[f.id] ? [formValues[f.id]] : []),
       setSelected: (arr) => { formValues[f.id] = arr[0] || ""; },
       multi: false,
       allowCreate: true,
-      onCreate: (name) => createAgentName(name),
+      onCreate: (name) => createAgentEntry({ name, type: f.id }),
       placeholder: `Search or add ${f.label.toLowerCase()}...`,
     });
     comboRefresh("modal_" + f.id);
@@ -1363,14 +1371,15 @@ function handleImportFile(e) {
       if (confirm(`Import ${rows.length} listing(s)?${photoWarning}`)) {
         const { error } = await sb.from("listings").insert(rows);
         if (error) { showError("Import failed: " + error.message); return; }
-        // Register any new agent names from this batch into the shared directory
-        const newNames = new Set();
+        // Register any new agent names from this batch into the shared directory,
+        // tagged with the role/type they were found under.
+        const newEntries = new Map(); // name -> type (first occurrence wins)
         rows.forEach((r) => {
           ["site_locator", "recruited_by", "unit_manager", "division_manager", "sub_broker"].forEach((k) => {
-            if (r[k] && !agentNames.includes(r[k])) newNames.add(r[k]);
+            if (r[k] && !agentNames.includes(r[k]) && !newEntries.has(r[k])) newEntries.set(r[k], k);
           });
         });
-        for (const name of newNames) await createAgentName(name);
+        for (const [name, type] of newEntries) await createAgentEntry({ name, type });
         currentPage = 0;
         await computePriceBounds();
         renderPriceSlider(true);
@@ -1432,62 +1441,178 @@ async function renderAgentDirectoryView() {
   body.innerHTML = `
     <div class="panel">
       <div class="card">
-        <div style="font-family:Georgia,serif; color:#163832; font-size:15px; margin-bottom:10px;">Add a name</div>
-        <div style="display:flex; gap:8px;">
-          <input id="newAgentNameInput" placeholder="Full name" style="flex:1; border:1px solid #E4DDCF; border-radius:3px; padding:8px 10px; font-size:14px;" />
-          <button class="btn" id="addAgentNameBtn">+ Add</button>
+        <div style="font-family:Georgia,serif; color:#163832; font-size:15px; margin-bottom:10px;">Add a profile</div>
+        <div class="row2">
+          <div><label style="display:block; font-size:11px; text-transform:uppercase; color:#6B6558; margin-bottom:4px;">Full name *</label>
+            <input id="newAgentName" placeholder="Full name" style="width:100%; border:1px solid #E4DDCF; border-radius:3px; padding:8px 10px; font-size:14px; box-sizing:border-box;" /></div>
+          <div><label style="display:block; font-size:11px; text-transform:uppercase; color:#6B6558; margin-bottom:4px;">Type *</label>
+            <select id="newAgentType" class="field" style="width:100%; padding:8px 10px;">
+              ${AGENT_ROLE_FIELDS.map((f) => `<option value="${f.id}">${f.label}</option>`).join("")}
+            </select></div>
         </div>
-        <div class="errline" id="agentDirError" style="display:none;"></div>
+        <div class="row2" style="margin-top:12px;">
+          <div><label style="display:block; font-size:11px; text-transform:uppercase; color:#6B6558; margin-bottom:4px;">Contact No.</label>
+            <input id="newAgentContact" placeholder="Contact No." style="width:100%; border:1px solid #E4DDCF; border-radius:3px; padding:8px 10px; font-size:14px; box-sizing:border-box;" /></div>
+          <div><label style="display:block; font-size:11px; text-transform:uppercase; color:#6B6558; margin-bottom:4px;">Email</label>
+            <input id="newAgentEmail" placeholder="Email" style="width:100%; border:1px solid #E4DDCF; border-radius:3px; padding:8px 10px; font-size:14px; box-sizing:border-box;" /></div>
+        </div>
+        <div class="errline" id="agentDirError" style="display:none; margin-top:10px;"></div>
+        <button class="btn" id="addAgentBtn" style="margin-top:12px;">+ Add</button>
       </div>
       <div id="agentDirectoryList">Loading…</div>
+      <div id="agentDirPaginationRow"></div>
     </div>
   `;
-  $("addAgentNameBtn").addEventListener("click", async () => {
-    const input = $("newAgentNameInput");
-    const name = input.value.trim();
+  $("addAgentBtn").addEventListener("click", async () => {
+    const name = $("newAgentName").value.trim();
+    const type = $("newAgentType").value;
+    const contact_no = $("newAgentContact").value.trim();
+    const email = $("newAgentEmail").value.trim();
     const errEl = $("agentDirError");
     errEl.style.display = "none";
-    if (!name) return;
+    if (!name) { errEl.textContent = "Name is required."; errEl.style.display = "block"; return; }
     if (agentNames.includes(name)) { errEl.textContent = "That name is already in the directory."; errEl.style.display = "block"; return; }
-    await createAgentName(name);
-    input.value = "";
-    renderAgentDirectoryView();
+    await createAgentEntry({ name, type, contact_no, email });
+    $("newAgentName").value = ""; $("newAgentContact").value = ""; $("newAgentEmail").value = "";
+    agentDirPage = 0;
+    loadAgentDirectoryPage();
   });
 
-  const { data, error } = await sb.from("agent_directory").select("*").order("name");
-  if (error) { $("agentDirectoryList").innerHTML = `<div class="errline">Could not load: ${escapeHtml(error.message)}</div>`; return; }
-  agentNames = (data || []).map((r) => r.name);
+  agentDirPage = 0;
+  await loadAgentDirectoryPage();
+}
+
+async function loadAgentDirectoryPage() {
   const list = $("agentDirectoryList");
-  if (!data || data.length === 0) {
-    list.innerHTML = `<div class="empty"><h3>No names yet</h3><p>Add names above, or they'll be added automatically the first time you use them on a listing.</p></div>`;
+  if (!list) return;
+  const { data, error, count } = await sb.from("agent_directory").select("*", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(agentDirPage * agentDirPageSize, agentDirPage * agentDirPageSize + agentDirPageSize - 1);
+  if (error) { list.innerHTML = `<div class="errline">Could not load: ${escapeHtml(error.message)}</div>`; return; }
+  agentDirTotalCount = count || 0;
+  const rows = data || [];
+
+  if (agentDirTotalCount === 0) {
+    list.innerHTML = `<div class="empty"><h3>No profiles yet</h3><p>Add one above, or they'll be added automatically the first time a name is used on a listing.</p></div>`;
+    $("agentDirPaginationRow").innerHTML = "";
     return;
   }
-  list.innerHTML = data.map((row) => `
+
+  list.innerHTML = rows.map((row) => `
     <div class="card">
       <div class="card-row">
-        <div id="agentRow_${row.id}" style="font-family:Georgia,serif; font-size:15px; color:#163832;">${escapeHtml(row.name)}</div>
+        <div>
+          <div style="font-family:Georgia,serif; font-size:15px; color:#163832;">${escapeHtml(row.name)}</div>
+          <div style="font-size:12px; color:#6B6558; margin-top:2px;">
+            ${escapeHtml(roleLabelFor(row.type))}${row.contact_no ? " · " + escapeHtml(row.contact_no) : ""}${row.email ? " · " + escapeHtml(row.email) : ""}
+          </div>
+        </div>
         <div style="display:flex; gap:8px;">
-          <button class="btn secondary" data-rename="${row.id}" data-name="${escapeHtml(row.name)}">Rename</button>
+          <button class="btn secondary" data-editagent="${row.id}">Edit</button>
           <button class="btn danger" data-deleteagent="${row.id}" data-name="${escapeHtml(row.name)}">Delete</button>
         </div>
       </div>
     </div>`).join("");
-  list.querySelectorAll("[data-rename]").forEach((btn) => btn.addEventListener("click", () => renameAgentName(btn.dataset.rename, btn.dataset.name)));
-  list.querySelectorAll("[data-deleteagent]").forEach((btn) => btn.addEventListener("click", () => deleteAgentName(btn.dataset.deleteagent, btn.dataset.name)));
+  list.querySelectorAll("[data-editagent]").forEach((btn) => btn.addEventListener("click", () => {
+    const row = rows.find((r) => r.id === btn.dataset.editagent);
+    if (row) openEditAgentModal(row);
+  }));
+  list.querySelectorAll("[data-deleteagent]").forEach((btn) => btn.addEventListener("click", () => deleteAgentEntry(btn.dataset.deleteagent, btn.dataset.name)));
+  renderAgentDirPagination();
 }
-async function renameAgentName(id, oldName) {
-  const newName = prompt("Rename this agent/personnel:", oldName);
-  if (!newName || !newName.trim() || newName.trim() === oldName) return;
-  const { error } = await sb.from("agent_directory").update({ name: newName.trim() }).eq("id", id);
-  if (error) { alert("Could not rename: " + error.message); return; }
-  alert('Note: existing listings that already used "' + oldName + '" keep that text as-is — this only changes the name for future selections. Edit those listings individually if you want them updated too.');
-  renderAgentDirectoryView();
+
+function roleLabelFor(type) {
+  const f = AGENT_ROLE_FIELDS.find((f) => f.id === type);
+  return f ? f.label : (type || "—");
 }
-async function deleteAgentName(id, name) {
+
+function renderAgentDirPagination() {
+  const row = $("agentDirPaginationRow");
+  if (!row) return;
+  const totalPages = Math.max(1, Math.ceil(agentDirTotalCount / agentDirPageSize));
+  const startItem = agentDirPage * agentDirPageSize + 1;
+  const endItem = Math.min(agentDirTotalCount, (agentDirPage + 1) * agentDirPageSize);
+  row.innerHTML = `
+    <div class="pagination-inner" style="margin-top:14px;">
+      <span>Showing ${startItem}–${endItem} of ${agentDirTotalCount}</span>
+      <div class="pagination-controls">
+        <label>Per page
+          <select id="agentDirPageSizeSelect" class="field">
+            ${[10, 25, 50, 100].map((n) => `<option value="${n}" ${n === agentDirPageSize ? "selected" : ""}>${n}</option>`).join("")}
+          </select>
+        </label>
+        <button class="btn ghost" id="agentDirPrevBtn" ${agentDirPage <= 0 ? "disabled" : ""}>‹ Prev</button>
+        <span class="page-indicator">Page ${agentDirPage + 1} of ${totalPages}</span>
+        <button class="btn ghost" id="agentDirNextBtn" ${agentDirPage >= totalPages - 1 ? "disabled" : ""}>Next ›</button>
+      </div>
+    </div>`;
+  $("agentDirPageSizeSelect").addEventListener("change", (e) => {
+    agentDirPageSize = parseInt(e.target.value, 10);
+    agentDirPage = 0;
+    loadAgentDirectoryPage();
+  });
+  $("agentDirPrevBtn").addEventListener("click", () => { if (agentDirPage > 0) { agentDirPage--; loadAgentDirectoryPage(); } });
+  $("agentDirNextBtn").addEventListener("click", () => { if (agentDirPage < totalPages - 1) { agentDirPage++; loadAgentDirectoryPage(); } });
+}
+
+function openEditAgentModal(row) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `
+    <form class="modal" style="max-width:440px;">
+      <h2>Edit profile <button type="button" class="icon-btn" id="closeEditAgent">✕</button></h2>
+      <label>Full name *</label><input id="ea_name" required />
+      <label>Type *</label>
+      <select class="field" id="ea_type" style="width:100%">
+        ${AGENT_ROLE_FIELDS.map((f) => `<option value="${f.id}">${f.label}</option>`).join("")}
+      </select>
+      <label>Contact No.</label><input id="ea_contact" />
+      <label>Email</label><input id="ea_email" />
+      <div class="errline" id="editAgentError" style="display:none;"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="cancelEditAgent">Cancel</button>
+        <button type="submit" class="btn">Save changes</button>
+      </div>
+    </form>`;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector("#ea_name").value = row.name || "";
+  backdrop.querySelector("#ea_type").value = row.type || "site_locator";
+  backdrop.querySelector("#ea_contact").value = row.contact_no || "";
+  backdrop.querySelector("#ea_email").value = row.email || "";
+
+  const close = () => backdrop.remove();
+  backdrop.querySelector("#closeEditAgent").addEventListener("click", close);
+  backdrop.querySelector("#cancelEditAgent").addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  backdrop.querySelector("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const newName = backdrop.querySelector("#ea_name").value.trim();
+    const newType = backdrop.querySelector("#ea_type").value;
+    const newContact = backdrop.querySelector("#ea_contact").value.trim();
+    const newEmail = backdrop.querySelector("#ea_email").value.trim();
+    if (!newName) return;
+    const { error } = await sb.from("agent_directory")
+      .update({ name: newName, type: newType, contact_no: newContact, email: newEmail })
+      .eq("id", row.id);
+    if (error) {
+      const errEl = backdrop.querySelector("#editAgentError");
+      errEl.textContent = "Could not save: " + error.message;
+      errEl.style.display = "block";
+      return;
+    }
+    if (newName !== row.name) {
+      alert('Note: existing listings that already used "' + row.name + '" keep that text as-is — this only changes the name for future selections.');
+    }
+    close();
+    loadAgentDirectoryPage();
+  });
+}
+
+async function deleteAgentEntry(id, name) {
   if (!confirm(`Remove "${name}" from the directory? Existing listings that used this name keep it as plain text — this only stops it appearing as a suggestion going forward.`)) return;
   const { error } = await sb.from("agent_directory").delete().eq("id", id);
   if (error) { alert("Could not delete: " + error.message); return; }
-  renderAgentDirectoryView();
+  loadAgentDirectoryPage();
 }
 
 // =====================================================================
