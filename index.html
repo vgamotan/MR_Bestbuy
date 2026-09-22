@@ -103,14 +103,34 @@
   }
   // Cities available given the CURRENT filter selections (regions + provinces).
   function citiesForRegions(regionsArr, provincesArr) {
-    const regions = (regionsArr && regionsArr.length) ? regionsArr : PH_REGIONS;
+    const hasProvinceFilter = provincesArr && provincesArr.length > 0;
+    let regions;
+    if (regionsArr && regionsArr.length) {
+      regions = regionsArr;
+    } else if (hasProvinceFilter) {
+      // No region explicitly chosen, but a province was — only consider
+      // regions that actually contain that province (fixes NCR's cities
+      // leaking in whenever a province like "Cebu" was picked with no
+      // region selected: NCR has no provinces, so it must be excluded here).
+      regions = PH_REGIONS.filter((region) => {
+        const r = REGION_DATA[region];
+        return r && r.provinces && provincesArr.some((p) => Object.prototype.hasOwnProperty.call(r.provinces, p));
+      });
+    } else {
+      regions = PH_REGIONS;
+    }
     let pool = [];
     regions.forEach((region) => {
       const r = REGION_DATA[region];
       if (!r) return;
-      if (r.cities) { pool.push(...r.cities); return; }
+      if (r.cities) {
+        // No-province region (NCR): only include it when no province filter
+        // is active at all — a province filter can never match it.
+        if (!hasProvinceFilter) pool.push(...r.cities);
+        return;
+      }
       const provNames = Object.keys(r.provinces);
-      const relevant = (provincesArr && provincesArr.length) ? provincesArr.filter((p) => provNames.includes(p)) : provNames;
+      const relevant = hasProvinceFilter ? provincesArr.filter((p) => provNames.includes(p)) : provNames;
       relevant.forEach((p) => pool.push(...r.provinces[p]));
     });
     return [...new Set(pool)];
@@ -124,6 +144,14 @@
       if (r && r.provinces) pool.push(...Object.keys(r.provinces));
     });
     return [...new Set(pool)];
+  }
+  // Which region(s) a given province actually belongs to — used so picking
+  // a province in the filter toolbar auto-selects its parent region too.
+  function regionsForProvince(province) {
+    return PH_REGIONS.filter((region) => {
+      const r = REGION_DATA[region];
+      return r && r.provinces && Object.prototype.hasOwnProperty.call(r.provinces, province);
+    });
   }
   const CATEGORIES = [
     { id: "raw_land", label: "Raw Land" },
@@ -658,6 +686,16 @@ function renderListingsView(isAdmin) {
     getSelected: () => filterProvinces,
     setSelected: (arr) => {
       filterProvinces = arr;
+      // Keep Region in sync: picking a province auto-selects its parent
+      // region if that region isn't already selected.
+      if (filterProvinces.length) {
+        const impliedRegions = [...new Set(filterProvinces.flatMap((p) => regionsForProvince(p)))];
+        const merged = [...new Set([...filterRegions, ...impliedRegions])];
+        if (merged.length !== filterRegions.length) {
+          filterRegions = merged;
+          comboRefresh("filterRegion");
+        }
+      }
       const availableCities = citiesForRegions(filterRegions, filterProvinces);
       filterCities = filterCities.filter((c) => availableCities.includes(c));
       comboRefresh("filterCity");
