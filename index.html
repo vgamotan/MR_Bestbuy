@@ -1025,7 +1025,7 @@ function renderListRows(isAdmin) {
             <div class="detail-section-title">Agent Hierarchy</div>
             <div class="detail-grid">
               <div><b>Site Locator</b>${escapeHtml(l.site_locator) || "—"}</div>
-              <div><b>Recruited By</b>${escapeHtml(l.recruited_by) || "—"}</div>
+              <div><b>Recruiter</b>${escapeHtml(l.recruited_by) || "—"}</div>
               <div><b>Unit Manager</b>${escapeHtml(l.unit_manager) || "—"}</div>
               <div><b>Division Manager</b>${escapeHtml(l.division_manager) || "—"}</div>
               <div><b>Sub Broker</b>${escapeHtml(l.sub_broker) || "—"}</div>
@@ -1078,7 +1078,7 @@ const FIELD_IDS = [
 ];
 const AGENT_ROLE_FIELDS = [
   { id: "site_locator", label: "Site Locator" },
-  { id: "recruited_by", label: "Recruited By" },
+  { id: "recruited_by", label: "Recruiter" },
   { id: "unit_manager", label: "Unit Manager" },
   { id: "division_manager", label: "Division Manager" },
   { id: "sub_broker", label: "Sub Broker" },
@@ -1355,7 +1355,7 @@ function handleImportFile(e) {
           ats_price_num: parsePrice(row.atsPrice || row["ATS Price"] || ""),
           selling_price_num: parsePrice(row.sellingPrice || row["Selling Price"] || ""),
           site_locator: (row.siteLocator || row["Site Locator"] || "").toString().trim(),
-          recruited_by: (row.recruitedBy || row["Recruited By"] || "").toString().trim(),
+          recruited_by: (row.recruitedBy || row["Recruited By"] || row["Recruiter"] || "").toString().trim(),
           unit_manager: (row.unitManager || row["Unit Manager"] || "").toString().trim(),
           division_manager: (row.divisionManager || row["Division Manager"] || "").toString().trim(),
           sub_broker: (row.subBroker || row["Sub Broker"] || "").toString().trim(),
