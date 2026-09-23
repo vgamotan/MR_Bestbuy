@@ -351,6 +351,9 @@ let agentDirectory = []; // full records: id, name, type, contact_no, email — 
 let agentDirPage = 0;
 let agentDirPageSize = 25;
 let agentDirTotalCount = 0;
+let accountsPage = 0;
+let accountsPageSize = 25;
+let accountsTotalCount = 0;
 let filterRegions = [];   // multi-select
 let filterProvinces = []; // multi-select (only meaningful for regions that have provinces)
 let filterCities = [];    // multi-select
@@ -537,6 +540,7 @@ function formatMoney(v) {
 // =====================================================================
 let authMode = "login"; // login | signup
 let authError = "";
+let authMsg = "";
 
 function renderAuth() {
   $("root").innerHTML = `
@@ -547,22 +551,34 @@ function renderAuth() {
       <label>Email</label><input id="a_email" type="email" />
       <label>Password</label><input id="a_password" type="password" />
       ${authError ? `<div class="errline">${escapeHtml(authError)}</div>` : ""}
+      ${authMsg ? `<div class="msg">${escapeHtml(authMsg)}</div>` : ""}
       <button class="btn" id="authSubmit">${authMode === "login" ? "Sign in" : "Sign up"}</button>
       <div class="switchline">
         ${authMode === "login"
-          ? `Don't have an account? <a id="toSignup">Sign up</a>`
+          ? `Don't have an account? <a id="toSignup">Sign up</a> · <a id="forgotPw">Forgot password?</a>`
           : `Already have an account? <a id="toLogin">Sign in</a>`}
       </div>
     </div>`;
   $("authSubmit").addEventListener("click", handleAuthSubmit);
-  const toSignup = $("toSignup"); if (toSignup) toSignup.addEventListener("click", () => { authMode = "signup"; authError = ""; renderAuth(); });
-  const toLogin = $("toLogin"); if (toLogin) toLogin.addEventListener("click", () => { authMode = "login"; authError = ""; renderAuth(); });
+  const toSignup = $("toSignup"); if (toSignup) toSignup.addEventListener("click", () => { authMode = "signup"; authError = ""; authMsg = ""; renderAuth(); });
+  const toLogin = $("toLogin"); if (toLogin) toLogin.addEventListener("click", () => { authMode = "login"; authError = ""; authMsg = ""; renderAuth(); });
+  const forgotPw = $("forgotPw");
+  if (forgotPw) forgotPw.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const email = $("a_email").value.trim();
+    authError = ""; authMsg = "";
+    if (!email) { authError = "Enter your email above first, then click \"Forgot password?\" again."; renderAuth(); return; }
+    const { error } = await sb.auth.resetPasswordForEmail(email);
+    if (error) { authError = error.message; renderAuth(); return; }
+    authMsg = "If that email has an account, a password reset link has been sent.";
+    renderAuth();
+  });
 }
 
 async function handleAuthSubmit() {
   const email = $("a_email").value.trim();
   const password = $("a_password").value;
-  authError = "";
+  authError = ""; authMsg = "";
   if (!email || !password) { authError = "Email and password are required."; renderAuth(); return; }
   if (authMode === "signup") {
     const fullName = $("a_name").value.trim();
@@ -592,11 +608,14 @@ async function signOut() {
 // =====================================================================
 function renderPending() {
   const isRejected = profile.status === "rejected";
+  const isDisabled = profile.status === "disabled";
   $("root").innerHTML = `
     <div class="pending-wrap">
-      <h1>${isRejected ? "Access not approved" : "Pending approval"}</h1>
+      <h1>${isDisabled ? "Access disabled" : isRejected ? "Access not approved" : "Pending approval"}</h1>
       <p style="color:#6B6558; font-size:14px;">
-        ${isRejected
+        ${isDisabled
+          ? "Your access has been disabled by an admin. Contact your admin if you think this is a mistake."
+          : isRejected
           ? "Your account request was not approved. Contact the admin if you think this is a mistake."
           : "Your account is created but waiting on admin approval before you can view listings. Check back soon."}
       </p>
@@ -627,6 +646,7 @@ function renderApp() {
         <div class="tab ${adminTab === "listings" ? "active" : ""}" data-tab="listings">Listings</div>
         <div class="tab ${adminTab === "archive" ? "active" : ""}" data-tab="archive">Archive</div>
         <div class="tab ${adminTab === "agents" ? "active" : ""}" data-tab="agents">Agent Hierarchy</div>
+        <div class="tab ${adminTab === "accounts" ? "active" : ""}" data-tab="accounts">Agent Profiles</div>
         <div class="tab ${adminTab === "approvals" ? "active" : ""}" data-tab="approvals">Pending Approvals</div>
         <div class="tab ${adminTab === "reports" ? "active" : ""}" data-tab="reports">Search Reports</div>
       </div>` : ""}
@@ -642,6 +662,7 @@ function renderApp() {
   if (!isAdmin || adminTab === "listings") renderListingsView(isAdmin);
   else if (adminTab === "archive") renderArchiveView();
   else if (adminTab === "agents") renderAgentDirectoryView();
+  else if (adminTab === "accounts") renderAgentAccountsView();
   else if (adminTab === "approvals") renderApprovalsView();
   else if (adminTab === "reports") renderReportsView();
 }
@@ -1613,6 +1634,200 @@ async function deleteAgentEntry(id, name) {
   const { error } = await sb.from("agent_directory").delete().eq("id", id);
   if (error) { alert("Could not delete: " + error.message); return; }
   loadAgentDirectoryPage();
+}
+
+// =====================================================================
+// ADMIN: AGENT PROFILES (login accounts) — distinct from Agent Hierarchy
+// (which is just a name lookup for listing fields, not login access)
+// =====================================================================
+function randomPassword() {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let out = "";
+  for (let i = 0; i < 12; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+// Creates a brand-new agent login account WITHOUT disturbing the admin's
+// own session. Uses the raw Auth REST endpoint directly (not sb.auth.signUp,
+// which would swap the browser's active session to the new account).
+async function adminCreateAgentAccount(email, password, fullName) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, data: { full_name: fullName } }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.msg || json.error_description || json.error || "Could not create account");
+  const newId = (json.user && json.user.id) || json.id || null;
+  return newId;
+}
+
+async function renderAgentAccountsView() {
+  const body = $("tabBody");
+  body.innerHTML = `
+    <div class="panel">
+      <div class="card">
+        <div style="font-family:Georgia,serif; color:#163832; font-size:15px; margin-bottom:10px;">Add an agent</div>
+        <div class="row2">
+          <div><label style="display:block; font-size:11px; text-transform:uppercase; color:#6B6558; margin-bottom:4px;">Full name *</label>
+            <input id="newAcctName" placeholder="Full name" style="width:100%; border:1px solid #E4DDCF; border-radius:3px; padding:8px 10px; font-size:14px; box-sizing:border-box;" /></div>
+          <div><label style="display:block; font-size:11px; text-transform:uppercase; color:#6B6558; margin-bottom:4px;">Email *</label>
+            <input id="newAcctEmail" type="email" placeholder="Email" style="width:100%; border:1px solid #E4DDCF; border-radius:3px; padding:8px 10px; font-size:14px; box-sizing:border-box;" /></div>
+        </div>
+        <div class="row2" style="margin-top:12px; align-items:flex-end;">
+          <div><label style="display:block; font-size:11px; text-transform:uppercase; color:#6B6558; margin-bottom:4px;">Temporary password *</label>
+            <input id="newAcctPassword" placeholder="Temporary password" style="width:100%; border:1px solid #E4DDCF; border-radius:3px; padding:8px 10px; font-size:14px; box-sizing:border-box;" /></div>
+          <div><button type="button" class="btn ghost" id="genPasswordBtn" style="width:100%;">Generate password</button></div>
+        </div>
+        <div style="font-size:11.5px; color:#6B6558; margin-top:8px;">You'll need to share this password with the agent yourself (text, chat, etc.) — the app doesn't email it. They can change it later via "Forgot password?" on the login screen.</div>
+        <div class="errline" id="acctError" style="display:none; margin-top:10px;"></div>
+        <div class="msg" id="acctMsg" style="display:none; margin-top:10px;"></div>
+        <button class="btn" id="addAcctBtn" style="margin-top:12px;">+ Create agent account</button>
+      </div>
+      <div id="accountsList">Loading…</div>
+      <div id="accountsPaginationRow"></div>
+    </div>
+  `;
+  $("genPasswordBtn").addEventListener("click", () => { $("newAcctPassword").value = randomPassword(); });
+  $("addAcctBtn").addEventListener("click", async () => {
+    const name = $("newAcctName").value.trim();
+    const email = $("newAcctEmail").value.trim();
+    const password = $("newAcctPassword").value;
+    const errEl = $("acctError"), msgEl = $("acctMsg");
+    errEl.style.display = "none"; msgEl.style.display = "none";
+    if (!name || !email || !password) { errEl.textContent = "Full name, email, and a password are all required."; errEl.style.display = "block"; return; }
+    if (password.length < 6) { errEl.textContent = "Password must be at least 6 characters."; errEl.style.display = "block"; return; }
+    try {
+      const newId = await adminCreateAgentAccount(email, password, name);
+      if (newId) {
+        // Auto-approve since admin is creating this directly (skip the pending step)
+        await sb.from("profiles").update({ status: "approved", role: "agent" }).eq("id", newId);
+      }
+      msgEl.textContent = `Account created for ${name} (${email}). Password: ${password} — share this with them now.`;
+      msgEl.style.display = "block";
+      $("newAcctName").value = ""; $("newAcctEmail").value = ""; $("newAcctPassword").value = "";
+      accountsPage = 0;
+      loadAccountsPage();
+    } catch (e) {
+      errEl.textContent = "Could not create account: " + e.message;
+      errEl.style.display = "block";
+    }
+  });
+
+  accountsPage = 0;
+  await loadAccountsPage();
+}
+
+async function loadAccountsPage() {
+  const list = $("accountsList");
+  if (!list) return;
+  const { data, error, count } = await sb.from("profiles").select("*", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(accountsPage * accountsPageSize, accountsPage * accountsPageSize + accountsPageSize - 1);
+  if (error) { list.innerHTML = `<div class="errline">Could not load: ${escapeHtml(error.message)}</div>`; return; }
+  accountsTotalCount = count || 0;
+  const rows = data || [];
+
+  if (accountsTotalCount === 0) {
+    list.innerHTML = `<div class="empty"><h3>No agent profiles yet</h3><p>Add one above, or agents can self-register from the login screen.</p></div>`;
+    $("accountsPaginationRow").innerHTML = "";
+    return;
+  }
+
+  const statusColorMap = { approved: "#1F7A4D", pending: "#B98B2A", rejected: "#8A8478", disabled: "#B23B3B" };
+  list.innerHTML = rows.map((row) => `
+    <div class="card">
+      <div class="card-row">
+        <div>
+          <div style="font-family:Georgia,serif; font-size:15px; color:#163832;">${escapeHtml(row.full_name || "(no name)")}</div>
+          <div style="font-size:12px; color:#6B6558; margin-top:2px;">${escapeHtml(row.email)} · ${row.role === "admin" ? "Admin" : "Agent"}</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="status-pill" style="background:${statusColorMap[row.status] || "#8A8478"}">${escapeHtml(row.status)}</span>
+          <button class="btn secondary" data-editacct="${row.id}">Edit name</button>
+          ${row.status === "approved" ? `<button class="btn danger" data-disableacct="${row.id}">Disable</button>` : ""}
+          ${row.status === "disabled" || row.status === "rejected" || row.status === "pending" ? `<button class="btn secondary" data-approveacct="${row.id}">${row.status === "pending" ? "Approve" : "Reactivate"}</button>` : ""}
+        </div>
+      </div>
+    </div>`).join("");
+  list.querySelectorAll("[data-editacct]").forEach((btn) => btn.addEventListener("click", () => {
+    const row = rows.find((r) => r.id === btn.dataset.editacct);
+    if (row) openEditAccountModal(row);
+  }));
+  list.querySelectorAll("[data-disableacct]").forEach((btn) => btn.addEventListener("click", () => setAccountStatus(btn.dataset.disableacct, "disabled")));
+  list.querySelectorAll("[data-approveacct]").forEach((btn) => btn.addEventListener("click", () => setAccountStatus(btn.dataset.approveacct, "approved")));
+  renderAccountsPagination();
+}
+
+async function setAccountStatus(id, status) {
+  const { error } = await sb.from("profiles").update({ status }).eq("id", id);
+  if (error) { alert("Could not update: " + error.message); return; }
+  loadAccountsPage();
+}
+
+function openEditAccountModal(row) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `
+    <form class="modal" style="max-width:400px;">
+      <h2>Edit name <button type="button" class="icon-btn" id="closeEditAcct">✕</button></h2>
+      <label>Full name *</label><input id="ea2_name" required />
+      <div style="font-size:11.5px; color:#6B6558; margin-top:8px;">Email: ${escapeHtml(row.email)} (not editable here)</div>
+      <div class="errline" id="editAcctError" style="display:none;"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn secondary" id="cancelEditAcct">Cancel</button>
+        <button type="submit" class="btn">Save</button>
+      </div>
+    </form>`;
+  document.body.appendChild(backdrop);
+  backdrop.querySelector("#ea2_name").value = row.full_name || "";
+  const close = () => backdrop.remove();
+  backdrop.querySelector("#closeEditAcct").addEventListener("click", close);
+  backdrop.querySelector("#cancelEditAcct").addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  backdrop.querySelector("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const newName = backdrop.querySelector("#ea2_name").value.trim();
+    if (!newName) return;
+    const { error } = await sb.from("profiles").update({ full_name: newName }).eq("id", row.id);
+    if (error) {
+      const errEl = backdrop.querySelector("#editAcctError");
+      errEl.textContent = "Could not save: " + error.message;
+      errEl.style.display = "block";
+      return;
+    }
+    close();
+    loadAccountsPage();
+  });
+}
+
+function renderAccountsPagination() {
+  const row = $("accountsPaginationRow");
+  if (!row) return;
+  const totalPages = Math.max(1, Math.ceil(accountsTotalCount / accountsPageSize));
+  const startItem = accountsPage * accountsPageSize + 1;
+  const endItem = Math.min(accountsTotalCount, (accountsPage + 1) * accountsPageSize);
+  row.innerHTML = `
+    <div class="pagination-inner" style="margin-top:14px;">
+      <span>Showing ${startItem}–${endItem} of ${accountsTotalCount}</span>
+      <div class="pagination-controls">
+        <label>Per page
+          <select id="accountsPageSizeSelect" class="field">
+            ${[10, 25, 50, 100].map((n) => `<option value="${n}" ${n === accountsPageSize ? "selected" : ""}>${n}</option>`).join("")}
+          </select>
+        </label>
+        <button class="btn ghost" id="accountsPrevBtn" ${accountsPage <= 0 ? "disabled" : ""}>‹ Prev</button>
+        <span class="page-indicator">Page ${accountsPage + 1} of ${totalPages}</span>
+        <button class="btn ghost" id="accountsNextBtn" ${accountsPage >= totalPages - 1 ? "disabled" : ""}>Next ›</button>
+      </div>
+    </div>`;
+  $("accountsPageSizeSelect").addEventListener("change", (e) => {
+    accountsPageSize = parseInt(e.target.value, 10);
+    accountsPage = 0;
+    loadAccountsPage();
+  });
+  $("accountsPrevBtn").addEventListener("click", () => { if (accountsPage > 0) { accountsPage--; loadAccountsPage(); } });
+  $("accountsNextBtn").addEventListener("click", () => { if (accountsPage < totalPages - 1) { accountsPage++; loadAccountsPage(); } });
 }
 
 // =====================================================================
